@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Modern Professional Multi-File Excel Data Plotter v4.0 - FIXED VERSION
-Complete UI Overhaul with Responsive Design and Modern Interface
+Modern Professional Multi-File Excel Data Plotter v4.1 - Vacuum Analysis Edition
+Enhanced for vacuum pressure data analysis with improved data handling
 Required packages: pip install pandas matplotlib openpyxl xlrd seaborn scipy scikit-learn customtkinter pillow
 """
 
@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
 import matplotlib.dates as mdates
-from matplotlib.patches import Rectangle, Polygon
+from matplotlib.patches import Rectangle, Polygon, FancyArrowPatch
 from matplotlib.lines import Line2D
 import numpy as np
 import seaborn as sns
@@ -45,7 +45,7 @@ ctk.set_default_color_theme("blue")  # Themes: "blue", "green", "dark-blue"
 plt.style.use('seaborn-v0_8-darkgrid')
 sns.set_palette("husl")
 
-print("Starting Professional Multi-File Excel Plotter with Analysis Tools...")
+print("Starting Professional Multi-File Excel Plotter with Vacuum Analysis Tools...")
 
 class ColorPalette:
     # Light mode colors
@@ -508,13 +508,31 @@ class QuickActionBar(ctk.CTkFrame):
         super().__init__(master, height=50, **kwargs)
         self.pack_propagate(False)
         
-        # Action buttons with icons
+        # Left frame for file operations
+        self.left_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.left_frame.pack(side="left", fill="y")
+        
+        # Right frame for plot operations
+        self.right_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.right_frame.pack(side="right", fill="y")
+        
+        # Center frame for other actions
+        self.center_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.center_frame.pack(side="left", fill="both", expand=True)
+        
         self.actions = []
         
-    def add_action(self, text, icon, command, tooltip=""):
-        """Add an action button"""
+    def add_action(self, text, icon, command, tooltip="", side="left"):
+        """Add an action button to specified side"""
+        if side == "left":
+            parent = self.left_frame
+        elif side == "right":
+            parent = self.right_frame
+        else:
+            parent = self.center_frame
+            
         btn = ctk.CTkButton(
-            self,
+            parent,
             text=f"{icon} {text}",
             width=100,
             height=35,
@@ -528,9 +546,16 @@ class QuickActionBar(ctk.CTkFrame):
         self.actions.append(btn)
         return btn
         
-    def add_separator(self):
+    def add_separator(self, side="left"):
         """Add a vertical separator"""
-        sep = ctk.CTkFrame(self, width=2, fg_color=("gray80", "gray30"))
+        if side == "left":
+            parent = self.left_frame
+        elif side == "right":
+            parent = self.right_frame
+        else:
+            parent = self.center_frame
+            
+        sep = ctk.CTkFrame(parent, width=2, fg_color=("gray80", "gray30"))
         sep.pack(side="left", fill="y", padx=10, pady=10)
 
 class ModernSearchBar(ctk.CTkFrame):
@@ -672,10 +697,168 @@ class ModernAnnotationManager:
                                zorder=10,
                                picker=picker)
                 
+            elif ann['type'] == 'arrow':
+                # Enhanced arrow annotation with better control
+                arrow = FancyArrowPatch(
+                    (ann['x_start'], ann['y_start']),
+                    (ann['x_end'], ann['y_end']),
+                    arrowstyle=ann.get('style', '->'),
+                    color=ann.get('color', 'black'),
+                    linewidth=ann.get('width', 2),
+                    mutation_scale=20,
+                    alpha=ann.get('alpha', 0.8)
+                )
+                ax.add_patch(arrow)
+                artist = arrow
+                
             if artist:
                 artists[artist] = ann_id
         
         return artists
+
+class VacuumAnalysisTools:
+    """Specialized tools for vacuum pressure data analysis"""
+    
+    @staticmethod
+    def calculate_base_pressure(pressure_data, window_minutes=10, sample_rate_hz=1):
+        """Calculate base pressure using a moving window approach"""
+        window_size = int(window_minutes * 60 * sample_rate_hz)
+        
+        # Calculate rolling minimum
+        rolling_min = pd.Series(pressure_data).rolling(window=window_size, center=True).min()
+        
+        # Find the most stable region (lowest standard deviation)
+        rolling_std = pd.Series(pressure_data).rolling(window=window_size, center=True).std()
+        
+        # Get base pressure from the most stable region
+        if not rolling_std.isna().all():
+            most_stable_idx = rolling_std.idxmin()
+            base_pressure = rolling_min.iloc[most_stable_idx]
+        else:
+            base_pressure = np.min(pressure_data)
+        
+        return base_pressure, rolling_min, rolling_std
+    
+    @staticmethod
+    def calculate_noise_metrics(pressure_data, sample_rate_hz=1):
+        """Calculate noise metrics for vacuum pressure data"""
+        # Remove trend using polynomial fit
+        x = np.arange(len(pressure_data))
+        coeffs = np.polyfit(x, pressure_data, 2)
+        trend = np.polyval(coeffs, x)
+        detrended = pressure_data - trend
+        
+        # Calculate noise metrics
+        noise_rms = np.sqrt(np.mean(detrended**2))
+        noise_peak_to_peak = np.max(detrended) - np.min(detrended)
+        
+        # Frequency analysis
+        fft_values = np.fft.fft(detrended)
+        frequencies = np.fft.fftfreq(len(detrended), 1/sample_rate_hz)
+        power_spectrum = np.abs(fft_values)**2
+        
+        # Find dominant noise frequencies
+        positive_freq_mask = frequencies > 0
+        dominant_freq_idx = np.argmax(power_spectrum[positive_freq_mask])
+        dominant_frequency = frequencies[positive_freq_mask][dominant_freq_idx]
+        
+        return {
+            'noise_rms': noise_rms,
+            'noise_p2p': noise_peak_to_peak,
+            'dominant_freq': dominant_frequency,
+            'power_spectrum': power_spectrum[positive_freq_mask],
+            'frequencies': frequencies[positive_freq_mask],
+            'detrended_signal': detrended
+        }
+    
+    @staticmethod
+    def detect_pressure_spikes(pressure_data, threshold_factor=3, min_spike_duration=1):
+        """Detect pressure spikes in vacuum data"""
+        # Calculate rolling statistics
+        rolling_mean = pd.Series(pressure_data).rolling(window=100, center=True).mean()
+        rolling_std = pd.Series(pressure_data).rolling(window=100, center=True).std()
+        
+        # Identify spikes
+        threshold = rolling_mean + threshold_factor * rolling_std
+        spike_mask = pressure_data > threshold
+        
+        # Group consecutive spikes
+        spikes = []
+        spike_start = None
+        
+        for i, is_spike in enumerate(spike_mask):
+            if is_spike and spike_start is None:
+                spike_start = i
+            elif not is_spike and spike_start is not None:
+                if i - spike_start >= min_spike_duration:
+                    spikes.append({
+                        'start': spike_start,
+                        'end': i,
+                        'duration': i - spike_start,
+                        'max_pressure': np.max(pressure_data[spike_start:i]),
+                        'severity': 'high' if np.max(pressure_data[spike_start:i]) > rolling_mean.iloc[spike_start] * 10 else 'medium'
+                    })
+                spike_start = None
+        
+        return spikes
+    
+    @staticmethod
+    def calculate_leak_rate(pressure_data, time_data, start_pressure, end_pressure=None):
+        """Calculate vacuum leak rate"""
+        if end_pressure is None:
+            end_pressure = pressure_data[-1]
+        
+        # Convert time to seconds if datetime
+        if pd.api.types.is_datetime64_any_dtype(time_data):
+            time_seconds = (time_data - time_data.iloc[0]).dt.total_seconds()
+        else:
+            time_seconds = time_data
+        
+        # Fit exponential or linear model
+        log_pressure = np.log(pressure_data)
+        coeffs = np.polyfit(time_seconds, log_pressure, 1)
+        
+        # Leak rate in mbar·L/s (approximate)
+        leak_rate = coeffs[0] * np.mean(pressure_data)
+        
+        # Quality of fit
+        fitted = np.exp(np.polyval(coeffs, time_seconds))
+        r_squared = 1 - np.sum((pressure_data - fitted)**2) / np.sum((pressure_data - np.mean(pressure_data))**2)
+        
+        return {
+            'leak_rate': leak_rate,
+            'r_squared': r_squared,
+            'fitted_curve': fitted,
+            'time_constant': -1/coeffs[0] if coeffs[0] != 0 else np.inf
+        }
+    
+    @staticmethod
+    def analyze_pump_down_curve(pressure_data, time_data):
+        """Analyze pump-down characteristics"""
+        # Find key points
+        initial_pressure = pressure_data[0]
+        final_pressure = pressure_data[-1]
+        
+        # Time to reach certain pressure levels
+        milestones = {}
+        pressure_targets = [1e-3, 1e-4, 1e-5, 1e-6, 1e-7]
+        
+        for target in pressure_targets:
+            if final_pressure <= target < initial_pressure:
+                idx = np.where(pressure_data <= target)[0]
+                if len(idx) > 0:
+                    milestones[f"{target:.0e} mbar"] = time_data[idx[0]]
+        
+        # Calculate pumping speed changes
+        log_pressure = np.log10(pressure_data)
+        d_log_p_dt = np.gradient(log_pressure)
+        
+        return {
+            'initial_pressure': initial_pressure,
+            'final_pressure': final_pressure,
+            'milestones': milestones,
+            'pumping_speed_indicator': -d_log_p_dt
+        }
 
 class DataAnalysisTools:
     """Collection of data analysis methods"""
@@ -824,6 +1007,10 @@ class ModernSeriesConfig:
         self.highlight_business_hours = False
         self.highlight_outliers = False
         self.outlier_method = 'keep'
+        
+        # Vacuum-specific defaults
+        self.highlight_base_pressure = False
+        self.highlight_spikes = False
 
 class FileData:
     """Container for loaded file data"""
@@ -835,6 +1022,185 @@ class FileData:
         self.original_df = dataframe.copy()
         self.load_time = datetime.now()
         self.series_list = []
+
+class ImprovedDataSelector(ctk.CTkFrame):
+    """Improved data selector for handling various Excel layouts"""
+    def __init__(self, master, file_data, on_data_selected=None, **kwargs):
+        super().__init__(master, **kwargs)
+        self.file_data = file_data
+        self.on_data_selected = on_data_selected
+        self.preview_rows = 10
+        
+        self.create_widgets()
+        
+    def create_widgets(self):
+        """Create the data selector interface"""
+        # Preview section
+        preview_label = ctk.CTkLabel(self, text="Data Preview", font=("", 14, "bold"))
+        preview_label.pack(pady=(10, 5))
+        
+        # Preview frame with scrollbars
+        preview_frame = ctk.CTkFrame(self)
+        preview_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        
+        # Create text widget for preview
+        self.preview_text = ctk.CTkTextbox(preview_frame, height=200)
+        self.preview_text.pack(fill="both", expand=True)
+        
+        # Update preview
+        self.update_preview()
+        
+        # Column detection section
+        detect_frame = ctk.CTkFrame(self)
+        detect_frame.pack(fill="x", padx=10, pady=10)
+        
+        ctk.CTkLabel(detect_frame, text="Header Row:").pack(side="left", padx=5)
+        self.header_row_var = tk.IntVar(value=0)
+        self.header_spin = ctk.CTkEntry(detect_frame, textvariable=self.header_row_var, width=60)
+        self.header_spin.pack(side="left", padx=5)
+        
+        ctk.CTkButton(
+            detect_frame,
+            text="Auto-Detect Headers",
+            command=self.auto_detect_headers,
+            width=150
+        ).pack(side="left", padx=10)
+        
+        ctk.CTkButton(
+            detect_frame,
+            text="Update Preview",
+            command=self.update_preview,
+            width=100
+        ).pack(side="left", padx=5)
+        
+        # Data range selection
+        range_frame = ctk.CTkFrame(self)
+        range_frame.pack(fill="x", padx=10, pady=10)
+        
+        ctk.CTkLabel(range_frame, text="Data Range:").grid(row=0, column=0, sticky="w", padx=5)
+        
+        ctk.CTkLabel(range_frame, text="Start Row:").grid(row=0, column=1, padx=5)
+        self.start_row_var = tk.IntVar(value=1)
+        ctk.CTkEntry(range_frame, textvariable=self.start_row_var, width=80).grid(row=0, column=2, padx=5)
+        
+        ctk.CTkLabel(range_frame, text="End Row:").grid(row=0, column=3, padx=5)
+        self.end_row_var = tk.IntVar(value=len(self.file_data.df))
+        ctk.CTkEntry(range_frame, textvariable=self.end_row_var, width=80).grid(row=0, column=4, padx=5)
+        
+        # Column selection
+        col_frame = ctk.CTkFrame(self)
+        col_frame.pack(fill="x", padx=10, pady=10)
+        
+        ctk.CTkLabel(col_frame, text="Select Columns:").pack(anchor="w", pady=5)
+        
+        # Column listbox with scrollbar
+        list_frame = ctk.CTkFrame(col_frame)
+        list_frame.pack(fill="both", expand=True)
+        
+        scrollbar = ctk.CTkScrollbar(list_frame)
+        scrollbar.pack(side="right", fill="y")
+        
+        self.column_listbox = tk.Listbox(
+            list_frame,
+            selectmode="multiple",
+            height=8,
+            yscrollcommand=scrollbar.set
+        )
+        self.column_listbox.pack(side="left", fill="both", expand=True)
+        scrollbar.configure(command=self.column_listbox.yview)
+        
+        # Populate columns
+        self.update_column_list()
+        
+        # Apply button
+        ctk.CTkButton(
+            self,
+            text="Apply Selection",
+            command=self.apply_selection,
+            fg_color=ColorPalette.SUCCESS
+        ).pack(pady=10)
+    
+    def auto_detect_headers(self):
+        """Auto-detect header row"""
+        # Simple heuristic: find row with most non-numeric values
+        max_non_numeric = 0
+        best_row = 0
+        
+        for i in range(min(20, len(self.file_data.df))):
+            row = self.file_data.df.iloc[i]
+            non_numeric_count = sum(1 for val in row if not self.is_numeric(val))
+            
+            if non_numeric_count > max_non_numeric:
+                max_non_numeric = non_numeric_count
+                best_row = i
+        
+        self.header_row_var.set(best_row)
+        self.update_preview()
+    
+    def is_numeric(self, value):
+        """Check if value is numeric"""
+        try:
+            float(value)
+            return True
+        except:
+            return False
+    
+    def update_preview(self):
+        """Update data preview"""
+        try:
+            header_row = self.header_row_var.get()
+            
+            # Show preview with potential headers
+            preview_text = "Preview (first 10 rows):\n\n"
+            
+            if header_row > 0:
+                preview_text += "Detected Headers:\n"
+                headers = self.file_data.df.iloc[header_row].values
+                preview_text += ", ".join(str(h) for h in headers) + "\n\n"
+            
+            # Show data rows
+            start = max(0, header_row + 1)
+            end = min(start + self.preview_rows, len(self.file_data.df))
+            
+            preview_df = self.file_data.df.iloc[start:end]
+            preview_text += preview_df.to_string()
+            
+            self.preview_text.delete("1.0", tk.END)
+            self.preview_text.insert("1.0", preview_text)
+            
+            # Update column list
+            self.update_column_list()
+            
+        except Exception as e:
+            self.preview_text.delete("1.0", tk.END)
+            self.preview_text.insert("1.0", f"Error updating preview: {str(e)}")
+    
+    def update_column_list(self):
+        """Update column selection list"""
+        self.column_listbox.delete(0, tk.END)
+        
+        header_row = self.header_row_var.get()
+        
+        if header_row >= 0 and header_row < len(self.file_data.df):
+            # Use specified row as headers
+            columns = self.file_data.df.iloc[header_row].values
+            for i, col in enumerate(columns):
+                self.column_listbox.insert(tk.END, f"Column {i}: {col}")
+        else:
+            # Use default column names
+            for col in self.file_data.df.columns:
+                self.column_listbox.insert(tk.END, str(col))
+    
+    def apply_selection(self):
+        """Apply the data selection"""
+        if self.on_data_selected:
+            selection_info = {
+                'header_row': self.header_row_var.get(),
+                'start_row': self.start_row_var.get(),
+                'end_row': self.end_row_var.get(),
+                'selected_columns': [self.column_listbox.get(i) for i in self.column_listbox.curselection()]
+            }
+            self.on_data_selected(selection_info)
 
 class ModernSeriesConfigDialog:
     """Modern, intuitive series configuration dialog"""
@@ -1031,6 +1397,7 @@ class ModernSeriesConfigDialog:
         canvas.configure(yscrollcommand=scrollbar.set)
         
         # Create cards
+        self.create_data_range_card()  # New card for data range
         self.create_appearance_card()
         self.create_data_handling_card()
         self.create_analysis_card()
@@ -1038,6 +1405,79 @@ class ModernSeriesConfigDialog:
         
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
+    
+    def create_data_range_card(self):
+        """Create data range selection card"""
+        card = self.create_card(self.scrollable_frame, "📊 Data Range", expanded=True)
+        
+        # Current data info
+        info_frame = ttk.Frame(card)
+        info_frame.pack(fill='x', pady=5)
+        
+        # Get actual data bounds
+        max_rows = len(self.file_data.df)
+        
+        ttk.Label(info_frame, text=f"Total rows in file: {max_rows:,}", 
+                 font=('Segoe UI', 10)).pack(anchor='w')
+        
+        # Range selection
+        range_frame = ttk.Frame(card)
+        range_frame.pack(fill='x', pady=10)
+        
+        ttk.Label(range_frame, text="Start Index:").grid(row=0, column=0, sticky='w', padx=5, pady=5)
+        self.start_var = tk.IntVar(value=self.series.start_index)
+        self.start_spin = ttk.Spinbox(range_frame, from_=0, to=max_rows-1, 
+                                     textvariable=self.start_var, width=15,
+                                     command=self.on_range_changed)
+        self.start_spin.grid(row=0, column=1, padx=5, pady=5)
+        
+        ttk.Label(range_frame, text="End Index:").grid(row=0, column=2, sticky='w', padx=(20, 5), pady=5)
+        self.end_var = tk.IntVar(value=self.series.end_index or max_rows)
+        self.end_spin = ttk.Spinbox(range_frame, from_=1, to=max_rows, 
+                                   textvariable=self.end_var, width=15,
+                                   command=self.on_range_changed)
+        self.end_spin.grid(row=0, column=3, padx=5, pady=5)
+        
+        # Quick range buttons
+        quick_frame = ttk.Frame(card)
+        quick_frame.pack(fill='x', pady=5)
+        
+        ttk.Label(quick_frame, text="Quick Select:").pack(side='left', padx=5)
+        
+        ttk.Button(quick_frame, text="First 100", 
+                  command=lambda: self.set_range(0, 100)).pack(side='left', padx=2)
+        ttk.Button(quick_frame, text="First 1000", 
+                  command=lambda: self.set_range(0, 1000)).pack(side='left', padx=2)
+        ttk.Button(quick_frame, text="Last 100", 
+                  command=lambda: self.set_range(max_rows-100, max_rows)).pack(side='left', padx=2)
+        ttk.Button(quick_frame, text="Last 1000", 
+                  command=lambda: self.set_range(max_rows-1000, max_rows)).pack(side='left', padx=2)
+        ttk.Button(quick_frame, text="All Data", 
+                  command=lambda: self.set_range(0, max_rows)).pack(side='left', padx=2)
+        
+        # Selected range info
+        self.range_info_label = ttk.Label(card, text="", font=('Segoe UI', 9))
+        self.range_info_label.pack(pady=5)
+        self.update_range_info()
+    
+    def set_range(self, start, end):
+        """Set data range"""
+        max_rows = len(self.file_data.df)
+        self.start_var.set(max(0, start))
+        self.end_var.set(min(max_rows, end))
+        self.on_range_changed()
+    
+    def on_range_changed(self):
+        """Handle range change"""
+        self.update_range_info()
+        self.update_preview()
+    
+    def update_range_info(self):
+        """Update range information display"""
+        start = self.start_var.get()
+        end = self.end_var.get()
+        count = end - start
+        self.range_info_label.config(text=f"Selected: {count:,} rows (indices {start} to {end-1})")
     
     def create_appearance_card(self):
         """Create appearance settings card"""
@@ -1329,20 +1769,18 @@ class ModernSeriesConfigDialog:
         ttk.Radiobutton(axis_frame, text="Right", variable=self.y_axis_var, 
                        value='right').pack(side='left', padx=5)
         
-        # Highlighting options
+        # Vacuum-specific highlighting options
         highlight_frame = ttk.LabelFrame(card, text="Auto-highlighting", padding=10)
         highlight_frame.pack(fill='x', pady=10)
         
-        self.highlight_weekends_var = tk.BooleanVar(value=getattr(self.series, 'highlight_weekends', False))
-        self.highlight_hours_var = tk.BooleanVar(value=getattr(self.series, 'highlight_business_hours', False))
+        self.highlight_base_var = tk.BooleanVar(value=getattr(self.series, 'highlight_base_pressure', False))
+        self.highlight_spikes_var = tk.BooleanVar(value=getattr(self.series, 'highlight_spikes', False))
         self.highlight_outliers_var = tk.BooleanVar(value=getattr(self.series, 'highlight_outliers', False))
         
-        if hasattr(self.series, '_datetime_detected') and self.series._datetime_detected:
-            ttk.Checkbutton(highlight_frame, text="Highlight weekends", 
-                           variable=self.highlight_weekends_var).pack(anchor='w')
-            ttk.Checkbutton(highlight_frame, text="Highlight business hours (9-5)", 
-                           variable=self.highlight_hours_var).pack(anchor='w')
-        
+        ttk.Checkbutton(highlight_frame, text="Highlight base pressure level", 
+                       variable=self.highlight_base_var).pack(anchor='w')
+        ttk.Checkbutton(highlight_frame, text="Highlight pressure spikes", 
+                       variable=self.highlight_spikes_var).pack(anchor='w')
         ttk.Checkbutton(highlight_frame, text="Highlight outliers", 
                        variable=self.highlight_outliers_var).pack(anchor='w')
     
@@ -1491,6 +1929,10 @@ class ModernSeriesConfigDialog:
     def apply_changes(self):
         """Apply all changes to series configuration"""
         try:
+            # Data range
+            self.series.start_index = self.start_var.get()
+            self.series.end_index = self.end_var.get()
+            
             # Basic settings
             self.series.color = self.color_var.get()
             
@@ -1522,15 +1964,6 @@ class ModernSeriesConfigDialog:
                     self.series.custom_datetime_format = self.custom_dt_var.get()
             
             # Analysis
-            self.series.show_trendline = self.show_trend_var.get()
-            self.series.trend_type = self.trend_type_var.get()
-            
-            # Update trend parameters
-            if self.series.trend_type == 'polynomial' and hasattr(self, 'poly_degree_var') and self.poly_degree_var:
-                self.series.trend_params['degree'] = self.poly_degree_var.get()
-            elif self.series.trend_type == 'moving_average' and hasattr(self, 'ma_window_var') and self.ma_window_var:
-                self.series.trend_params['window'] = self.ma_window_var.get()
-            
             self.series.show_peaks = self.show_peaks_var.get()
             self.series.peak_prominence = self.peak_prom_var.get()
             self.series.show_statistics = self.show_stats_var.get()
@@ -1541,9 +1974,9 @@ class ModernSeriesConfigDialog:
             self.series.legend_label = self.legend_label_var.get()
             self.series.y_axis = self.y_axis_var.get()
             
-            # Highlighting
-            self.series.highlight_weekends = self.highlight_weekends_var.get() if hasattr(self, 'highlight_weekends_var') else False
-            self.series.highlight_business_hours = self.highlight_hours_var.get() if hasattr(self, 'highlight_hours_var') else False
+            # Vacuum-specific highlighting
+            self.series.highlight_base_pressure = self.highlight_base_var.get() if hasattr(self, 'highlight_base_var') else False
+            self.series.highlight_spikes = self.highlight_spikes_var.get() if hasattr(self, 'highlight_spikes_var') else False
             self.series.highlight_outliers = self.highlight_outliers_var.get() if hasattr(self, 'highlight_outliers_var') else False
             
             self.result = 'apply'
@@ -1584,8 +2017,8 @@ class ModernSeriesConfigDialog:
             
             self.update_preview()
 
-class AnalysisDialog:
-    """Dialog for data analysis tools"""
+class VacuumAnalysisDialog:
+    """Dialog for vacuum-specific data analysis tools"""
     def __init__(self, parent, series_data, all_series, loaded_files):
         self.parent = parent
         self.series_data = series_data
@@ -1594,7 +2027,7 @@ class AnalysisDialog:
         self.result = None
         
         self.dialog = tk.Toplevel(parent)
-        self.dialog.title("Data Analysis Tools")
+        self.dialog.title("Vacuum Data Analysis Tools")
         self.dialog.geometry("900x700")
         self.dialog.transient(parent)
         self.dialog.grab_set()
@@ -1607,20 +2040,20 @@ class AnalysisDialog:
         notebook = ttk.Notebook(self.dialog)
         notebook.pack(fill='both', expand=True, padx=10, pady=10)
         
-        # Statistics tab
-        self.create_statistics_tab(notebook)
+        # Base pressure analysis tab
+        self.create_base_pressure_tab(notebook)
         
-        # Peak detection tab
-        self.create_peak_detection_tab(notebook)
+        # Noise analysis tab
+        self.create_noise_analysis_tab(notebook)
         
-        # Correlation analysis tab
-        self.create_correlation_tab(notebook)
+        # Spike detection tab
+        self.create_spike_detection_tab(notebook)
         
-        # Regression analysis tab
-        self.create_regression_tab(notebook)
+        # Leak rate analysis tab
+        self.create_leak_rate_tab(notebook)
         
-        # Frequency analysis tab
-        self.create_frequency_tab(notebook)
+        # Pump-down analysis tab
+        self.create_pumpdown_tab(notebook)
         
         # Buttons
         btn_frame = ttk.Frame(self.dialog)
@@ -1629,199 +2062,217 @@ class AnalysisDialog:
         ttk.Button(btn_frame, text="Close", command=self.close).pack(side='right', padx=5)
         ttk.Button(btn_frame, text="Export Results", command=self.export_results).pack(side='right', padx=5)
     
-    def create_statistics_tab(self, notebook):
-        """Create statistics analysis tab"""
-        stats_frame = ttk.Frame(notebook)
-        notebook.add(stats_frame, text='📊 Statistics')
+    def create_base_pressure_tab(self, notebook):
+        """Create base pressure analysis tab"""
+        base_frame = ttk.Frame(notebook)
+        notebook.add(base_frame, text='🎯 Base Pressure')
         
         # Series selection
-        select_frame = ttk.LabelFrame(stats_frame, text="Select Series", padding=10)
+        select_frame = ttk.LabelFrame(base_frame, text="Select Series", padding=10)
         select_frame.pack(fill='x', padx=5, pady=5)
         
-        self.stats_series_var = tk.StringVar()
+        self.base_series_var = tk.StringVar()
         series_options = [f"{s.name} ({s.legend_label})" for s in self.all_series.values()]
-        ttk.Combobox(select_frame, textvariable=self.stats_series_var, 
+        ttk.Combobox(select_frame, textvariable=self.base_series_var, 
                     values=series_options, state='readonly', width=40).pack(pady=5)
         
-        ttk.Button(select_frame, text="Calculate Statistics", 
-                  command=self.calculate_statistics).pack(pady=5)
+        # Window size setting
+        window_frame = ttk.Frame(select_frame)
+        window_frame.pack(fill='x', pady=5)
+        
+        ttk.Label(window_frame, text="Window Size (minutes):").pack(side='left', padx=5)
+        self.window_size_var = tk.IntVar(value=10)
+        ttk.Spinbox(window_frame, from_=1, to=60, textvariable=self.window_size_var, width=10).pack(side='left', padx=5)
+        
+        ttk.Button(select_frame, text="Calculate Base Pressure", 
+                  command=self.calculate_base_pressure).pack(pady=5)
         
         # Results display
-        results_frame = ttk.LabelFrame(stats_frame, text="Statistical Results", padding=10)
+        results_frame = ttk.LabelFrame(base_frame, text="Analysis Results", padding=10)
         results_frame.pack(fill='both', expand=True, padx=5, pady=5)
         
         # Create text widget for results
-        self.stats_text = tk.Text(results_frame, wrap='word', font=('Consolas', 10))
-        stats_scroll = ttk.Scrollbar(results_frame, command=self.stats_text.yview)
-        self.stats_text.config(yscrollcommand=stats_scroll.set)
+        self.base_text = tk.Text(results_frame, wrap='word', font=('Consolas', 10))
+        base_scroll = ttk.Scrollbar(results_frame, command=self.base_text.yview)
+        self.base_text.config(yscrollcommand=base_scroll.set)
         
-        self.stats_text.pack(side='left', fill='both', expand=True)
-        stats_scroll.pack(side='right', fill='y')
+        self.base_text.pack(side='left', fill='both', expand=True)
+        base_scroll.pack(side='right', fill='y')
+        
+        # Visualization frame
+        viz_frame = ttk.LabelFrame(base_frame, text="Visualization", padding=10)
+        viz_frame.pack(fill='x', padx=5, pady=5)
+        
+        ttk.Button(viz_frame, text="Add Base Pressure Line to Plot", 
+                  command=self.add_base_pressure_line).pack(pady=5)
     
-    def create_peak_detection_tab(self, notebook):
-        """Create peak detection tab"""
-        peak_frame = ttk.Frame(notebook)
-        notebook.add(peak_frame, text='📈 Peak Detection')
+    def create_noise_analysis_tab(self, notebook):
+        """Create noise analysis tab"""
+        noise_frame = ttk.Frame(notebook)
+        notebook.add(noise_frame, text='📊 Noise Analysis')
         
         # Configuration
-        config_frame = ttk.LabelFrame(peak_frame, text="Peak Detection Settings", padding=10)
+        config_frame = ttk.LabelFrame(noise_frame, text="Noise Analysis Settings", padding=10)
         config_frame.pack(fill='x', padx=5, pady=5)
         
         # Series selection
         ttk.Label(config_frame, text="Series:").grid(row=0, column=0, sticky='w', padx=5, pady=5)
-        self.peak_series_var = tk.StringVar()
+        self.noise_series_var = tk.StringVar()
         series_options = [f"{s.name} ({s.legend_label})" for s in self.all_series.values()]
-        ttk.Combobox(config_frame, textvariable=self.peak_series_var, 
-                    values=series_options, state='readonly', width=30).grid(row=0, column=1, padx=5, pady=5)
-        
-        # Prominence setting
-        ttk.Label(config_frame, text="Prominence:").grid(row=1, column=0, sticky='w', padx=5, pady=5)
-        self.prominence_var = tk.DoubleVar(value=0.1)
-        ttk.Scale(config_frame, from_=0.01, to=1.0, variable=self.prominence_var, 
-                 orient='horizontal', length=200).grid(row=1, column=1, padx=5, pady=5)
-        ttk.Label(config_frame, textvariable=self.prominence_var).grid(row=1, column=2, padx=5, pady=5)
-        
-        ttk.Button(config_frame, text="Detect Peaks", 
-                  command=self.detect_peaks).grid(row=2, column=1, pady=10)
-        
-        # Results
-        results_frame = ttk.LabelFrame(peak_frame, text="Detection Results", padding=10)
-        results_frame.pack(fill='both', expand=True, padx=5, pady=5)
-        
-        # Create treeview for peaks
-        columns = ['Type', 'Index', 'X Value', 'Y Value']
-        self.peaks_tree = ttk.Treeview(results_frame, columns=columns, show='headings', height=15)
-        
-        for col in columns:
-            self.peaks_tree.heading(col, text=col)
-            self.peaks_tree.column(col, width=100)
-        
-        peaks_scroll = ttk.Scrollbar(results_frame, orient='vertical', command=self.peaks_tree.yview)
-        self.peaks_tree.configure(yscrollcommand=peaks_scroll.set)
-        
-        self.peaks_tree.pack(side='left', fill='both', expand=True)
-        peaks_scroll.pack(side='right', fill='y')
-        
-        # Action buttons
-        action_frame = ttk.Frame(peak_frame)
-        action_frame.pack(fill='x', padx=5, pady=5)
-        
-        ttk.Button(action_frame, text="Mark Selected on Plot", 
-                  command=self.mark_selected_peaks).pack(side='left', padx=5)
-        ttk.Button(action_frame, text="Export Peak Data", 
-                  command=self.export_peak_data).pack(side='left', padx=5)
-    
-    def create_correlation_tab(self, notebook):
-        """Create correlation analysis tab"""
-        corr_frame = ttk.Frame(notebook)
-        notebook.add(corr_frame, text='🔗 Correlation')
-        
-        # Series selection
-        select_frame = ttk.LabelFrame(corr_frame, text="Select Series for Correlation", padding=10)
-        select_frame.pack(fill='x', padx=5, pady=5)
-        
-        ttk.Label(select_frame, text="Select multiple series to analyze correlation:").pack(pady=5)
-        
-        # Listbox for multiple selection
-        self.corr_listbox = tk.Listbox(select_frame, selectmode='multiple', height=8)
-        for series in self.all_series.values():
-            self.corr_listbox.insert(tk.END, f"{series.name} - {series.y_column}")
-        self.corr_listbox.pack(fill='x', pady=5)
-        
-        ttk.Button(select_frame, text="Calculate Correlation Matrix", 
-                  command=self.calculate_correlation).pack(pady=5)
-        
-        # Results
-        results_frame = ttk.LabelFrame(corr_frame, text="Correlation Matrix", padding=10)
-        results_frame.pack(fill='both', expand=True, padx=5, pady=5)
-        
-        self.corr_text = tk.Text(results_frame, wrap='word', font=('Consolas', 10))
-        corr_scroll = ttk.Scrollbar(results_frame, command=self.corr_text.yview)
-        self.corr_text.config(yscrollcommand=corr_scroll.set)
-        
-        self.corr_text.pack(side='left', fill='both', expand=True)
-        corr_scroll.pack(side='right', fill='y')
-    
-    def create_regression_tab(self, notebook):
-        """Create regression analysis tab"""
-        reg_frame = ttk.Frame(notebook)
-        notebook.add(reg_frame, text='📉 Regression')
-        
-        # Configuration
-        config_frame = ttk.LabelFrame(reg_frame, text="Regression Settings", padding=10)
-        config_frame.pack(fill='x', padx=5, pady=5)
-        
-        # Series selection
-        ttk.Label(config_frame, text="Series:").grid(row=0, column=0, sticky='w', padx=5, pady=5)
-        self.reg_series_var = tk.StringVar()
-        series_options = [f"{s.name} ({s.legend_label})" for s in self.all_series.values()]
-        ttk.Combobox(config_frame, textvariable=self.reg_series_var, 
-                    values=series_options, state='readonly', width=30).grid(row=0, column=1, padx=5, pady=5)
-        
-        # Polynomial degree
-        ttk.Label(config_frame, text="Polynomial Degree:").grid(row=1, column=0, sticky='w', padx=5, pady=5)
-        self.poly_degree_var = tk.IntVar(value=1)
-        ttk.Spinbox(config_frame, from_=1, to=10, textvariable=self.poly_degree_var, 
-                   width=10).grid(row=1, column=1, sticky='w', padx=5, pady=5)
-        
-        ttk.Button(config_frame, text="Perform Regression", 
-                  command=self.perform_regression).grid(row=2, column=1, pady=10)
-        
-        # Results
-        results_frame = ttk.LabelFrame(reg_frame, text="Regression Results", padding=10)
-        results_frame.pack(fill='both', expand=True, padx=5, pady=5)
-        
-        self.reg_text = tk.Text(results_frame, wrap='word', font=('Consolas', 10), height=10)
-        reg_scroll = ttk.Scrollbar(results_frame, command=self.reg_text.yview)
-        self.reg_text.config(yscrollcommand=reg_scroll.set)
-        
-        self.reg_text.pack(side='left', fill='both', expand=True)
-        reg_scroll.pack(side='right', fill='y')
-        
-        # Residuals plot frame
-        residual_frame = ttk.LabelFrame(reg_frame, text="Residual Plot", padding=10)
-        residual_frame.pack(fill='both', expand=True, padx=5, pady=5)
-        
-        self.residual_fig = Figure(figsize=(6, 3), facecolor='white')
-        self.residual_canvas = FigureCanvasTkAgg(self.residual_fig, master=residual_frame)
-        self.residual_canvas.get_tk_widget().pack(fill='both', expand=True)
-    
-    def create_frequency_tab(self, notebook):
-        """Create frequency analysis tab"""
-        freq_frame = ttk.Frame(notebook)
-        notebook.add(freq_frame, text='🌊 Frequency')
-        
-        # Configuration
-        config_frame = ttk.LabelFrame(freq_frame, text="FFT Settings", padding=10)
-        config_frame.pack(fill='x', padx=5, pady=5)
-        
-        # Series selection
-        ttk.Label(config_frame, text="Series:").grid(row=0, column=0, sticky='w', padx=5, pady=5)
-        self.fft_series_var = tk.StringVar()
-        series_options = [f"{s.name} ({s.legend_label})" for s in self.all_series.values()]
-        ttk.Combobox(config_frame, textvariable=self.fft_series_var, 
+        ttk.Combobox(config_frame, textvariable=self.noise_series_var, 
                     values=series_options, state='readonly', width=30).grid(row=0, column=1, padx=5, pady=5)
         
         # Sample rate
-        ttk.Label(config_frame, text="Sample Rate:").grid(row=1, column=0, sticky='w', padx=5, pady=5)
+        ttk.Label(config_frame, text="Sample Rate (Hz):").grid(row=1, column=0, sticky='w', padx=5, pady=5)
         self.sample_rate_var = tk.DoubleVar(value=1.0)
-        ttk.Entry(config_frame, textvariable=self.sample_rate_var, 
-                 width=15).grid(row=1, column=1, sticky='w', padx=5, pady=5)
+        ttk.Entry(config_frame, textvariable=self.sample_rate_var, width=15).grid(row=1, column=1, sticky='w', padx=5, pady=5)
         
-        ttk.Button(config_frame, text="Perform FFT", 
-                  command=self.perform_fft).grid(row=2, column=1, pady=10)
+        ttk.Button(config_frame, text="Analyze Noise", 
+                  command=self.analyze_noise).grid(row=2, column=1, pady=10)
         
-        # Results plot
-        plot_frame = ttk.LabelFrame(freq_frame, text="Frequency Spectrum", padding=10)
-        plot_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        # Results
+        results_frame = ttk.LabelFrame(noise_frame, text="Noise Metrics", padding=10)
+        results_frame.pack(fill='both', expand=True, padx=5, pady=5)
         
-        self.fft_fig = Figure(figsize=(8, 5), facecolor='white')
-        self.fft_canvas = FigureCanvasTkAgg(self.fft_fig, master=plot_frame)
-        self.fft_canvas.get_tk_widget().pack(fill='both', expand=True)
+        self.noise_text = tk.Text(results_frame, wrap='word', font=('Consolas', 10), height=10)
+        noise_scroll = ttk.Scrollbar(results_frame, command=self.noise_text.yview)
+        self.noise_text.config(yscrollcommand=noise_scroll.set)
+        
+        self.noise_text.pack(side='left', fill='both', expand=True)
+        noise_scroll.pack(side='right', fill='y')
+        
+        # Spectrum plot frame
+        spectrum_frame = ttk.LabelFrame(noise_frame, text="Frequency Spectrum", padding=10)
+        spectrum_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        self.noise_fig = Figure(figsize=(6, 3), facecolor='white')
+        self.noise_canvas = FigureCanvasTkAgg(self.noise_fig, master=spectrum_frame)
+        self.noise_canvas.get_tk_widget().pack(fill='both', expand=True)
     
-    def calculate_statistics(self):
-        """Calculate and display statistics"""
-        series_text = self.stats_series_var.get()
+    def create_spike_detection_tab(self, notebook):
+        """Create spike detection tab"""
+        spike_frame = ttk.Frame(notebook)
+        notebook.add(spike_frame, text='⚡ Spike Detection')
+        
+        # Configuration
+        config_frame = ttk.LabelFrame(spike_frame, text="Spike Detection Settings", padding=10)
+        config_frame.pack(fill='x', padx=5, pady=5)
+        
+        # Series selection
+        ttk.Label(config_frame, text="Series:").grid(row=0, column=0, sticky='w', padx=5, pady=5)
+        self.spike_series_var = tk.StringVar()
+        series_options = [f"{s.name} ({s.legend_label})" for s in self.all_series.values()]
+        ttk.Combobox(config_frame, textvariable=self.spike_series_var, 
+                    values=series_options, state='readonly', width=30).grid(row=0, column=1, padx=5, pady=5)
+        
+        # Threshold setting
+        ttk.Label(config_frame, text="Threshold (σ):").grid(row=1, column=0, sticky='w', padx=5, pady=5)
+        self.spike_threshold_var = tk.DoubleVar(value=3.0)
+        ttk.Scale(config_frame, from_=1.0, to=5.0, variable=self.spike_threshold_var, 
+                 orient='horizontal', length=200).grid(row=1, column=1, padx=5, pady=5)
+        ttk.Label(config_frame, textvariable=self.spike_threshold_var).grid(row=1, column=2, padx=5, pady=5)
+        
+        ttk.Button(config_frame, text="Detect Spikes", 
+                  command=self.detect_spikes).grid(row=2, column=1, pady=10)
+        
+        # Results
+        results_frame = ttk.LabelFrame(spike_frame, text="Detected Spikes", padding=10)
+        results_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        # Create treeview for spikes
+        columns = ['Index', 'Start Time', 'Duration', 'Max Pressure', 'Severity']
+        self.spikes_tree = ttk.Treeview(results_frame, columns=columns, show='headings', height=15)
+        
+        for col in columns:
+            self.spikes_tree.heading(col, text=col)
+            self.spikes_tree.column(col, width=100)
+        
+        spikes_scroll = ttk.Scrollbar(results_frame, orient='vertical', command=self.spikes_tree.yview)
+        self.spikes_tree.configure(yscrollcommand=spikes_scroll.set)
+        
+        self.spikes_tree.pack(side='left', fill='both', expand=True)
+        spikes_scroll.pack(side='right', fill='y')
+        
+        # Action buttons
+        action_frame = ttk.Frame(spike_frame)
+        action_frame.pack(fill='x', padx=5, pady=5)
+        
+        ttk.Button(action_frame, text="Mark Spikes on Plot", 
+                  command=self.mark_spikes_on_plot).pack(side='left', padx=5)
+        ttk.Button(action_frame, text="Export Spike Data", 
+                  command=self.export_spike_data).pack(side='left', padx=5)
+    
+    def create_leak_rate_tab(self, notebook):
+        """Create leak rate analysis tab"""
+        leak_frame = ttk.Frame(notebook)
+        notebook.add(leak_frame, text='💨 Leak Rate')
+        
+        # Configuration
+        config_frame = ttk.LabelFrame(leak_frame, text="Leak Rate Analysis", padding=10)
+        config_frame.pack(fill='x', padx=5, pady=5)
+        
+        # Series selection
+        ttk.Label(config_frame, text="Series:").grid(row=0, column=0, sticky='w', padx=5, pady=5)
+        self.leak_series_var = tk.StringVar()
+        series_options = [f"{s.name} ({s.legend_label})" for s in self.all_series.values()]
+        ttk.Combobox(config_frame, textvariable=self.leak_series_var, 
+                    values=series_options, state='readonly', width=30).grid(row=0, column=1, padx=5, pady=5)
+        
+        ttk.Button(config_frame, text="Calculate Leak Rate", 
+                  command=self.calculate_leak_rate).grid(row=1, column=1, pady=10)
+        
+        # Results
+        results_frame = ttk.LabelFrame(leak_frame, text="Leak Rate Results", padding=10)
+        results_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        self.leak_text = tk.Text(results_frame, wrap='word', font=('Consolas', 10), height=10)
+        leak_scroll = ttk.Scrollbar(results_frame, command=self.leak_text.yview)
+        self.leak_text.config(yscrollcommand=leak_scroll.set)
+        
+        self.leak_text.pack(side='left', fill='both', expand=True)
+        leak_scroll.pack(side='right', fill='y')
+        
+        # Fit plot frame
+        fit_frame = ttk.LabelFrame(leak_frame, text="Leak Rate Fit", padding=10)
+        fit_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        self.leak_fig = Figure(figsize=(6, 3), facecolor='white')
+        self.leak_canvas = FigureCanvasTkAgg(self.leak_fig, master=fit_frame)
+        self.leak_canvas.get_tk_widget().pack(fill='both', expand=True)
+    
+    def create_pumpdown_tab(self, notebook):
+        """Create pump-down analysis tab"""
+        pump_frame = ttk.Frame(notebook)
+        notebook.add(pump_frame, text='📉 Pump-down')
+        
+        # Configuration
+        config_frame = ttk.LabelFrame(pump_frame, text="Pump-down Analysis", padding=10)
+        config_frame.pack(fill='x', padx=5, pady=5)
+        
+        # Series selection
+        ttk.Label(config_frame, text="Series:").grid(row=0, column=0, sticky='w', padx=5, pady=5)
+        self.pump_series_var = tk.StringVar()
+        series_options = [f"{s.name} ({s.legend_label})" for s in self.all_series.values()]
+        ttk.Combobox(config_frame, textvariable=self.pump_series_var, 
+                    values=series_options, state='readonly', width=30).grid(row=0, column=1, padx=5, pady=5)
+        
+        ttk.Button(config_frame, text="Analyze Pump-down", 
+                  command=self.analyze_pumpdown).grid(row=1, column=1, pady=10)
+        
+        # Results
+        results_frame = ttk.LabelFrame(pump_frame, text="Pump-down Characteristics", padding=10)
+        results_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        self.pump_text = tk.Text(results_frame, wrap='word', font=('Consolas', 10))
+        pump_scroll = ttk.Scrollbar(results_frame, command=self.pump_text.yview)
+        self.pump_text.config(yscrollcommand=pump_scroll.set)
+        
+        self.pump_text.pack(side='left', fill='both', expand=True)
+        pump_scroll.pack(side='right', fill='y')
+    
+    def calculate_base_pressure(self):
+        """Calculate base pressure for selected series"""
+        series_text = self.base_series_var.get()
         if not series_text:
             messagebox.showwarning("Warning", "Please select a series")
             return
@@ -1840,68 +2291,121 @@ class AnalysisDialog:
         file_data = self.loaded_files[series.file_id]
         start_idx = series.start_index
         end_idx = series.end_index or len(file_data.df)
+        
         y_data = file_data.df.iloc[start_idx:end_idx][series.y_column].dropna()
         
         if len(y_data) == 0:
-            self.stats_text.delete(1.0, tk.END)
-            self.stats_text.insert(1.0, "No valid data in selected series")
+            self.base_text.delete(1.0, tk.END)
+            self.base_text.insert(1.0, "No valid data in selected series")
             return
         
-        # Calculate statistics
-        stats_dict = DataAnalysisTools.calculate_statistics(y_data)
+        # Calculate base pressure
+        window_minutes = self.window_size_var.get()
+        base_pressure, rolling_min, rolling_std = VacuumAnalysisTools.calculate_base_pressure(
+            y_data.values, window_minutes=window_minutes
+        )
         
         # Display results
-        result_text = f"STATISTICAL ANALYSIS\n"
+        result_text = f"BASE PRESSURE ANALYSIS\n"
         result_text += f"Series: {series.name}\n"
-        result_text += f"Column: {series.y_column}\n"
+        result_text += f"Window Size: {window_minutes} minutes\n"
         result_text += f"{'='*50}\n\n"
         
-        result_text += f"Descriptive Statistics:\n"
-        result_text += f"  Count:        {stats_dict['count']:,}\n"
-        result_text += f"  Mean:         {stats_dict['mean']:.6f}\n"
-        result_text += f"  Median:       {stats_dict['median']:.6f}\n"
-        result_text += f"  Std Dev:      {stats_dict['std']:.6f}\n"
-        result_text += f"  Variance:     {stats_dict['var']:.6f}\n"
-        result_text += f"  CV:           {stats_dict['cv']:.4f}\n\n"
+        result_text += f"Base Pressure: {base_pressure:.2e} mbar\n\n"
         
-        result_text += f"Range Statistics:\n"
-        result_text += f"  Minimum:      {stats_dict['min']:.6f}\n"
-        result_text += f"  Maximum:      {stats_dict['max']:.6f}\n"
-        result_text += f"  Range:        {stats_dict['range']:.6f}\n\n"
+        result_text += f"Additional Statistics:\n"
+        result_text += f"  Current Pressure: {y_data.iloc[-1]:.2e} mbar\n"
+        result_text += f"  Average Pressure: {y_data.mean():.2e} mbar\n"
+        result_text += f"  Minimum Pressure: {y_data.min():.2e} mbar\n"
+        result_text += f"  Stability (min std): {rolling_std.min():.2e} mbar\n"
         
-        result_text += f"Quartile Statistics:\n"
-        result_text += f"  Q1 (25%):     {stats_dict['q1']:.6f}\n"
-        result_text += f"  Q3 (75%):     {stats_dict['q3']:.6f}\n"
-        result_text += f"  IQR:          {stats_dict['iqr']:.6f}\n\n"
+        # Store results for plotting
+        self.current_base_pressure = base_pressure
+        self.current_base_series = series
         
-        result_text += f"Distribution Shape:\n"
-        result_text += f"  Skewness:     {stats_dict['skewness']:.6f}\n"
-        result_text += f"  Kurtosis:     {stats_dict['kurtosis']:.6f}\n"
-        
-        # Interpretation
-        result_text += f"\n{'='*50}\n"
-        result_text += f"INTERPRETATION:\n"
-        
-        if abs(stats_dict['skewness']) < 0.5:
-            result_text += "• Distribution is approximately symmetric\n"
-        elif stats_dict['skewness'] > 0:
-            result_text += "• Distribution is right-skewed (positive skew)\n"
-        else:
-            result_text += "• Distribution is left-skewed (negative skew)\n"
-        
-        if stats_dict['kurtosis'] > 3:
-            result_text += "• Distribution has heavy tails (leptokurtic)\n"
-        elif stats_dict['kurtosis'] < 3:
-            result_text += "• Distribution has light tails (platykurtic)\n"
-        else:
-            result_text += "• Distribution has normal tail weight (mesokurtic)\n"
-        
-        self.stats_text.delete(1.0, tk.END)
-        self.stats_text.insert(1.0, result_text)
+        self.base_text.delete(1.0, tk.END)
+        self.base_text.insert(1.0, result_text)
     
-    def detect_peaks(self):
-        """Detect peaks and valleys"""
-        series_text = self.peak_series_var.get()
+    def add_base_pressure_line(self):
+        """Add base pressure line to main plot"""
+        if not hasattr(self, 'current_base_pressure'):
+            messagebox.showwarning("Warning", "Please calculate base pressure first")
+            return
+        
+        # Add annotation to parent's annotation manager
+        if hasattr(self.parent, 'annotation_manager'):
+            self.parent.annotation_manager.add_annotation(
+                'hline',
+                y_pos=self.current_base_pressure,
+                label=f"Base Pressure: {self.current_base_pressure:.2e} mbar",
+                color='green',
+                style='--',
+                width=2
+            )
+            messagebox.showinfo("Success", "Base pressure line added to plot")
+    
+    def analyze_noise(self):
+        """Analyze noise in pressure data"""
+        series_text = self.noise_series_var.get()
+        if not series_text:
+            messagebox.showwarning("Warning", "Please select a series")
+            return
+        
+        # Find the series
+        series = None
+        for s in self.all_series.values():
+            if f"{s.name} ({s.legend_label})" == series_text:
+                series = s
+                break
+        
+        if not series:
+            return
+        
+        # Get data
+        file_data = self.loaded_files[series.file_id]
+        start_idx = series.start_index
+        end_idx = series.end_index or len(file_data.df)
+        
+        y_data = file_data.df.iloc[start_idx:end_idx][series.y_column].dropna()
+        
+        if len(y_data) == 0:
+            return
+        
+        # Analyze noise
+        sample_rate = self.sample_rate_var.get()
+        noise_metrics = VacuumAnalysisTools.calculate_noise_metrics(y_data.values, sample_rate)
+        
+        # Display results
+        result_text = f"NOISE ANALYSIS\n"
+        result_text += f"Series: {series.name}\n"
+        result_text += f"Sample Rate: {sample_rate} Hz\n"
+        result_text += f"{'='*50}\n\n"
+        
+        result_text += f"Noise Metrics:\n"
+        result_text += f"  RMS Noise: {noise_metrics['noise_rms']:.2e} mbar\n"
+        result_text += f"  Peak-to-Peak: {noise_metrics['noise_p2p']:.2e} mbar\n"
+        result_text += f"  Dominant Frequency: {noise_metrics['dominant_freq']:.3f} Hz\n"
+        result_text += f"  SNR: {20*np.log10(y_data.mean()/noise_metrics['noise_rms']):.1f} dB\n"
+        
+        self.noise_text.delete(1.0, tk.END)
+        self.noise_text.insert(1.0, result_text)
+        
+        # Plot frequency spectrum
+        self.noise_fig.clear()
+        ax = self.noise_fig.add_subplot(111)
+        
+        ax.semilogy(noise_metrics['frequencies'], noise_metrics['power_spectrum'])
+        ax.set_xlabel('Frequency (Hz)')
+        ax.set_ylabel('Power Spectral Density')
+        ax.set_title('Noise Frequency Spectrum')
+        ax.grid(True, alpha=0.3)
+        
+        self.noise_fig.tight_layout()
+        self.noise_canvas.draw()
+    
+    def detect_spikes(self):
+        """Detect pressure spikes"""
+        series_text = self.spike_series_var.get()
         if not series_text:
             messagebox.showwarning("Warning", "Please select a series")
             return
@@ -1922,184 +2426,83 @@ class AnalysisDialog:
         end_idx = series.end_index or len(file_data.df)
         data_slice = file_data.df.iloc[start_idx:end_idx]
         
-        # Prepare data
-        if series.x_column == 'Index':
-            x_data = np.arange(start_idx, end_idx)
-        else:
-            x_data = data_slice[series.x_column].values
-        
         y_data = data_slice[series.y_column].values
         
-        # Remove NaN values
-        valid_mask = ~(pd.isna(x_data) | pd.isna(y_data))
-        x_data = x_data[valid_mask]
-        y_data = y_data[valid_mask]
-        
-        if len(x_data) == 0:
-            messagebox.showwarning("Warning", "No valid data in selected series")
-            return
-        
-        # Calculate prominence based on data range
-        data_range = np.max(y_data) - np.min(y_data)
-        prominence = self.prominence_var.get() * data_range
-        
-        # Detect peaks and valleys
-        peak_results = DataAnalysisTools.find_peaks_and_valleys(x_data, y_data, prominence)
+        # Detect spikes
+        threshold_factor = self.spike_threshold_var.get()
+        spikes = VacuumAnalysisTools.detect_pressure_spikes(y_data, threshold_factor)
         
         # Clear previous results
-        for item in self.peaks_tree.get_children():
-            self.peaks_tree.delete(item)
+        for item in self.spikes_tree.get_children():
+            self.spikes_tree.delete(item)
         
-        # Display peaks
-        for i, (x, y) in enumerate(zip(peak_results['peaks']['x_values'], 
-                                       peak_results['peaks']['y_values'])):
-            self.peaks_tree.insert('', 'end', values=['Peak', i, f"{x:.6f}", f"{y:.6f}"])
+        # Display spikes
+        for i, spike in enumerate(spikes):
+            # Get time if available
+            if series.x_column != 'Index':
+                try:
+                    start_time = data_slice.iloc[spike['start']][series.x_column]
+                except:
+                    start_time = spike['start']
+            else:
+                start_time = spike['start']
+            
+            self.spikes_tree.insert('', 'end', values=[
+                i,
+                str(start_time),
+                spike['duration'],
+                f"{spike['max_pressure']:.2e}",
+                spike['severity']
+            ])
         
-        # Display valleys
-        for i, (x, y) in enumerate(zip(peak_results['valleys']['x_values'], 
-                                       peak_results['valleys']['y_values'])):
-            self.peaks_tree.insert('', 'end', values=['Valley', i, f"{x:.6f}", f"{y:.6f}"])
-        
-        # Store results for later use
-        self.current_peak_results = peak_results
-        self.current_peak_series = series
+        # Store results
+        self.current_spikes = spikes
+        self.current_spike_series = series
     
-    def mark_selected_peaks(self):
-        """Mark selected peaks on the main plot"""
-        selection = self.peaks_tree.selection()
-        if not selection:
-            messagebox.showwarning("Warning", "Please select peaks/valleys to mark")
+    def mark_spikes_on_plot(self):
+        """Mark detected spikes on the main plot"""
+        if not hasattr(self, 'current_spikes'):
+            messagebox.showwarning("Warning", "Please detect spikes first")
             return
         
-        if not hasattr(self, 'current_peak_results'):
-            return
-        
-        # Get parent's annotation manager
+        # Add annotations for spikes
         if hasattr(self.parent, 'annotation_manager'):
-            for item in selection:
-                values = self.peaks_tree.item(item)['values']
-                peak_type = values[0]
-                x_val = float(values[2])
-                y_val = float(values[3])
-                
-                # Add point marker
-                color = 'red' if peak_type == 'Peak' else 'blue'
-                marker = '^' if peak_type == 'Peak' else 'v'
+            for spike in self.current_spikes:
+                # Add region for spike
                 self.parent.annotation_manager.add_annotation(
-                    'point',
-                    x_pos=x_val,
-                    y_pos=y_val,
-                    label=f"{peak_type}: {y_val:.3f}",
-                    marker=marker,
-                    size=150,
-                    color=color
+                    'region',
+                    x_start=spike['start'],
+                    x_end=spike['end'],
+                    label=f"Spike: {spike['max_pressure']:.2e} mbar",
+                    color='red' if spike['severity'] == 'high' else 'orange',
+                    alpha=0.3
                 )
             
-            messagebox.showinfo("Success", f"Added {len(selection)} markers to plot")
+            messagebox.showinfo("Success", f"Added {len(self.current_spikes)} spike markers to plot")
     
-    def export_peak_data(self):
-        """Export peak detection results"""
-        if not hasattr(self, 'current_peak_results'):
-            messagebox.showwarning("Warning", "No peak detection results to export")
+    def export_spike_data(self):
+        """Export spike detection results"""
+        if not hasattr(self, 'current_spikes'):
+            messagebox.showwarning("Warning", "No spike data to export")
             return
         
         filename = filedialog.asksaveasfilename(
-            title="Export Peak Data",
+            title="Export Spike Data",
             defaultextension=".csv",
             filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
         )
         
         if filename:
             try:
-                # Prepare data for export
-                peak_data = []
-                
-                # Add peaks
-                for x, y in zip(self.current_peak_results['peaks']['x_values'],
-                               self.current_peak_results['peaks']['y_values']):
-                    peak_data.append({'Type': 'Peak', 'X': x, 'Y': y})
-                
-                # Add valleys
-                for x, y in zip(self.current_peak_results['valleys']['x_values'],
-                               self.current_peak_results['valleys']['y_values']):
-                    peak_data.append({'Type': 'Valley', 'X': x, 'Y': y})
-                
-                # Create DataFrame and export
-                df = pd.DataFrame(peak_data)
-                df.to_csv(filename, index=False)
-                
-                messagebox.showinfo("Success", f"Peak data exported to:\n{filename}")
-                
+                spike_df = pd.DataFrame(self.current_spikes)
+                spike_df.to_csv(filename, index=False)
+                messagebox.showinfo("Success", f"Spike data exported to:\n{filename}")
             except Exception as e:
-                messagebox.showerror("Error", f"Failed to export peak data:\n{str(e)}")
+                messagebox.showerror("Error", f"Failed to export spike data:\n{str(e)}")
     
-    def calculate_correlation(self):
-        """Calculate correlation between selected series"""
-        selection = self.corr_listbox.curselection()
-        if len(selection) < 2:
-            messagebox.showwarning("Warning", "Please select at least 2 series")
-            return
-        
-        # Get selected series
-        selected_series = []
-        series_list = list(self.all_series.values())
-        for idx in selection:
-            selected_series.append(series_list[idx])
-        
-        # Prepare data for correlation
-        correlation_data = {}
-        min_length = float('inf')
-        
-        for series in selected_series:
-            file_data = self.loaded_files[series.file_id]
-            start_idx = series.start_index
-            end_idx = series.end_index or len(file_data.df)
-            y_data = file_data.df.iloc[start_idx:end_idx][series.y_column].values
-            
-            correlation_data[series.name] = y_data
-            min_length = min(min_length, len(y_data))
-        
-        # Truncate all series to same length
-        for key in correlation_data:
-            correlation_data[key] = correlation_data[key][:min_length]
-        
-        # Calculate correlation matrix
-        df_corr = pd.DataFrame(correlation_data)
-        corr_matrix = df_corr.corr()
-        
-        # Display results
-        result_text = f"CORRELATION ANALYSIS\n"
-        result_text += f"{'='*50}\n"
-        result_text += f"Number of series: {len(selected_series)}\n"
-        result_text += f"Data points used: {min_length}\n\n"
-        
-        result_text += "Correlation Matrix:\n"
-        result_text += corr_matrix.to_string(float_format=lambda x: f'{x:.4f}')
-        
-        result_text += f"\n\n{'='*50}\n"
-        result_text += "INTERPRETATION:\n"
-        
-        # Find strong correlations
-        strong_corr = []
-        for i in range(len(corr_matrix.columns)):
-            for j in range(i+1, len(corr_matrix.columns)):
-                corr_val = corr_matrix.iloc[i, j]
-                if abs(corr_val) > 0.7:
-                    strong_corr.append((corr_matrix.columns[i], corr_matrix.columns[j], corr_val))
-        
-        if strong_corr:
-            result_text += "\nStrong correlations (|r| > 0.7):\n"
-            for s1, s2, corr in strong_corr:
-                result_text += f"• {s1} ↔ {s2}: {corr:.4f}\n"
-        else:
-            result_text += "\nNo strong correlations found (|r| > 0.7)\n"
-        
-        self.corr_text.delete(1.0, tk.END)
-        self.corr_text.insert(1.0, result_text)
-    
-    def perform_regression(self):
-        """Perform regression analysis"""
-        series_text = self.reg_series_var.get()
+    def calculate_leak_rate(self):
+        """Calculate vacuum leak rate"""
+        series_text = self.leak_series_var.get()
         if not series_text:
             messagebox.showwarning("Warning", "Please select a series")
             return
@@ -2122,98 +2525,57 @@ class AnalysisDialog:
         
         # Prepare data
         if series.x_column == 'Index':
-            x_data = np.arange(start_idx, end_idx)
+            x_data = np.arange(len(data_slice))
         else:
-            x_data = data_slice[series.x_column].values
-            # Convert to numeric if datetime
-            if pd.api.types.is_datetime64_any_dtype(x_data):
-                x_data = pd.to_numeric(x_data)
+            x_data = data_slice[series.x_column]
         
-        y_data = data_slice[series.y_column].values
+        y_data = data_slice[series.y_column]
         
         # Remove NaN values
-        valid_mask = ~(pd.isna(x_data) | pd.isna(y_data))
+        valid_mask = ~(pd.isna(y_data))
         x_data = x_data[valid_mask]
         y_data = y_data[valid_mask]
         
         if len(x_data) == 0:
-            messagebox.showwarning("Warning", "No valid data in selected series")
             return
         
-        # Perform regression
-        degree = self.poly_degree_var.get()
-        reg_results = DataAnalysisTools.perform_regression(x_data, y_data, degree)
+        # Calculate leak rate
+        start_pressure = y_data.iloc[0]
+        leak_results = VacuumAnalysisTools.calculate_leak_rate(y_data, x_data, start_pressure)
         
         # Display results
-        result_text = f"REGRESSION ANALYSIS\n"
-        result_text += f"{'='*50}\n"
+        result_text = f"LEAK RATE ANALYSIS\n"
         result_text += f"Series: {series.name}\n"
-        result_text += f"Polynomial Degree: {degree}\n"
-        result_text += f"Data Points: {len(x_data)}\n\n"
+        result_text += f"{'='*50}\n\n"
         
-        result_text += f"Model Performance:\n"
-        result_text += f"  R-squared: {reg_results['r_squared']:.6f}\n"
-        result_text += f"  RMSE: {np.sqrt(np.mean(reg_results['residuals']**2)):.6f}\n\n"
+        result_text += f"Initial Pressure: {start_pressure:.2e} mbar\n"
+        result_text += f"Final Pressure: {y_data.iloc[-1]:.2e} mbar\n\n"
         
-        result_text += f"Coefficients:\n"
-        for i, coef in enumerate(reg_results['coefficients']):
-            if degree == 1:
-                if i == 0:
-                    result_text += f"  Intercept: {coef:.6f}\n"
-                else:
-                    result_text += f"  Slope: {coef:.6f}\n"
-            else:
-                result_text += f"  x^{degree-i}: {coef:.6e}\n"
+        result_text += f"Leak Rate: {leak_results['leak_rate']:.2e} mbar·L/s\n"
+        result_text += f"Time Constant: {leak_results['time_constant']:.1f} s\n"
+        result_text += f"R-squared: {leak_results['r_squared']:.4f}\n"
         
-        # Equation
-        result_text += f"\nRegression Equation:\n"
-        if degree == 1:
-            result_text += f"  y = {reg_results['coefficients'][1]:.6f}x + {reg_results['coefficients'][0]:.6f}\n"
-        else:
-            equation = "  y = "
-            for i, coef in enumerate(reg_results['coefficients']):
-                power = degree - i
-                if i > 0:
-                    equation += " + " if coef >= 0 else " - "
-                    equation += f"{abs(coef):.3e}"
-                else:
-                    equation += f"{coef:.3e}"
-                
-                if power > 1:
-                    equation += f"x^{power}"
-                elif power == 1:
-                    equation += "x"
-            result_text += equation + "\n"
+        self.leak_text.delete(1.0, tk.END)
+        self.leak_text.insert(1.0, result_text)
         
-        self.reg_text.delete(1.0, tk.END)
-        self.reg_text.insert(1.0, result_text)
+        # Plot fit
+        self.leak_fig.clear()
+        ax = self.leak_fig.add_subplot(111)
         
-        # Plot residuals
-        self.residual_fig.clear()
-        ax = self.residual_fig.add_subplot(111)
-        
-        ax.scatter(x_data, reg_results['residuals'], alpha=0.6, s=30)
-        ax.axhline(y=0, color='r', linestyle='--', alpha=0.8)
-        ax.set_xlabel('X values')
-        ax.set_ylabel('Residuals')
-        ax.set_title('Residual Plot')
+        ax.semilogy(x_data, y_data, 'o', alpha=0.5, label='Data')
+        ax.semilogy(x_data, leak_results['fitted_curve'], 'r-', label='Fit')
+        ax.set_xlabel('Time')
+        ax.set_ylabel('Pressure (mbar)')
+        ax.set_title('Leak Rate Fit')
+        ax.legend()
         ax.grid(True, alpha=0.3)
         
-        self.residual_fig.tight_layout()
-        self.residual_canvas.draw()
-        
-        # Store results for adding to main plot
-        self.current_regression = {
-            'x_data': x_data,
-            'y_pred': reg_results['y_predicted'],
-            'series': series,
-            'degree': degree,
-            'r_squared': reg_results['r_squared']
-        }
+        self.leak_fig.tight_layout()
+        self.leak_canvas.draw()
     
-    def perform_fft(self):
-        """Perform FFT analysis"""
-        series_text = self.fft_series_var.get()
+    def analyze_pumpdown(self):
+        """Analyze pump-down characteristics"""
+        series_text = self.pump_series_var.get()
         if not series_text:
             messagebox.showwarning("Warning", "Please select a series")
             return
@@ -2232,51 +2594,48 @@ class AnalysisDialog:
         file_data = self.loaded_files[series.file_id]
         start_idx = series.start_index
         end_idx = series.end_index or len(file_data.df)
-        y_data = file_data.df.iloc[start_idx:end_idx][series.y_column].dropna().values
+        data_slice = file_data.df.iloc[start_idx:end_idx]
         
-        if len(y_data) == 0:
-            messagebox.showwarning("Warning", "No valid data in selected series")
+        # Prepare data
+        if series.x_column == 'Index':
+            x_data = np.arange(len(data_slice))
+        else:
+            x_data = data_slice[series.x_column]
+        
+        y_data = data_slice[series.y_column]
+        
+        # Remove NaN values
+        valid_mask = ~(pd.isna(y_data))
+        x_data = x_data[valid_mask]
+        y_data = y_data[valid_mask]
+        
+        if len(x_data) == 0:
             return
         
-        # Perform FFT
-        sample_rate = self.sample_rate_var.get()
-        frequencies, amplitudes = DataAnalysisTools.perform_fft(y_data, sample_rate)
+        # Analyze pump-down
+        pump_results = VacuumAnalysisTools.analyze_pump_down_curve(y_data.values, x_data)
         
-        # Plot results
-        self.fft_fig.clear()
-        ax = self.fft_fig.add_subplot(111)
+        # Display results
+        result_text = f"PUMP-DOWN ANALYSIS\n"
+        result_text += f"Series: {series.name}\n"
+        result_text += f"{'='*50}\n\n"
         
-        ax.plot(frequencies, amplitudes, 'b-', linewidth=1.5)
-        ax.set_xlabel('Frequency (Hz)')
-        ax.set_ylabel('Amplitude')
-        ax.set_title(f'Frequency Spectrum - {series.name}')
-        ax.grid(True, alpha=0.3)
-        ax.set_xlim(0, sample_rate/2)  # Nyquist frequency
+        result_text += f"Pressure Range:\n"
+        result_text += f"  Initial: {pump_results['initial_pressure']:.2e} mbar\n"
+        result_text += f"  Final: {pump_results['final_pressure']:.2e} mbar\n"
+        result_text += f"  Reduction: {pump_results['initial_pressure']/pump_results['final_pressure']:.1f}x\n\n"
         
-        # Find dominant frequencies
-        peak_indices = find_peaks(amplitudes, height=np.max(amplitudes)*0.1)[0]
-        if len(peak_indices) > 0:
-            peak_freqs = frequencies[peak_indices]
-            peak_amps = amplitudes[peak_indices]
-            
-            # Mark dominant frequencies
-            ax.scatter(peak_freqs, peak_amps, color='red', s=100, zorder=5)
-            
-            # Annotate top 3 frequencies
-            sorted_indices = np.argsort(peak_amps)[::-1][:3]
-            for idx in sorted_indices:
-                ax.annotate(f'{peak_freqs[idx]:.2f} Hz', 
-                           xy=(peak_freqs[idx], peak_amps[idx]),
-                           xytext=(10, 10), textcoords='offset points',
-                           fontsize=9, ha='left')
+        result_text += f"Milestones:\n"
+        for pressure, time in pump_results['milestones'].items():
+            result_text += f"  {pressure}: reached at {time}\n"
         
-        self.fft_fig.tight_layout()
-        self.fft_canvas.draw()
+        self.pump_text.delete(1.0, tk.END)
+        self.pump_text.insert(1.0, result_text)
     
     def export_results(self):
         """Export all analysis results"""
         filename = filedialog.asksaveasfilename(
-            title="Export Analysis Results",
+            title="Export Vacuum Analysis Results",
             defaultextension=".txt",
             filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
         )
@@ -2284,29 +2643,36 @@ class AnalysisDialog:
         if filename:
             try:
                 with open(filename, 'w') as f:
-                    f.write("DATA ANALYSIS RESULTS\n")
+                    f.write("VACUUM DATA ANALYSIS RESULTS\n")
                     f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
                     f.write("="*70 + "\n\n")
                     
-                    # Statistics
-                    if self.stats_text.get(1.0, tk.END).strip():
-                        f.write("STATISTICS\n")
+                    # Base pressure
+                    if self.base_text.get(1.0, tk.END).strip():
+                        f.write("BASE PRESSURE ANALYSIS\n")
                         f.write("-"*70 + "\n")
-                        f.write(self.stats_text.get(1.0, tk.END))
+                        f.write(self.base_text.get(1.0, tk.END))
                         f.write("\n\n")
                     
-                    # Correlation
-                    if self.corr_text.get(1.0, tk.END).strip():
-                        f.write("CORRELATION ANALYSIS\n")
+                    # Noise analysis
+                    if self.noise_text.get(1.0, tk.END).strip():
+                        f.write("NOISE ANALYSIS\n")
                         f.write("-"*70 + "\n")
-                        f.write(self.corr_text.get(1.0, tk.END))
+                        f.write(self.noise_text.get(1.0, tk.END))
                         f.write("\n\n")
                     
-                    # Regression
-                    if self.reg_text.get(1.0, tk.END).strip():
-                        f.write("REGRESSION ANALYSIS\n")
+                    # Leak rate
+                    if self.leak_text.get(1.0, tk.END).strip():
+                        f.write("LEAK RATE ANALYSIS\n")
                         f.write("-"*70 + "\n")
-                        f.write(self.reg_text.get(1.0, tk.END))
+                        f.write(self.leak_text.get(1.0, tk.END))
+                        f.write("\n\n")
+                    
+                    # Pump-down
+                    if self.pump_text.get(1.0, tk.END).strip():
+                        f.write("PUMP-DOWN ANALYSIS\n")
+                        f.write("-"*70 + "\n")
+                        f.write(self.pump_text.get(1.0, tk.END))
                         f.write("\n\n")
                 
                 messagebox.showinfo("Success", f"Analysis results exported to:\n{filename}")
@@ -2319,13 +2685,15 @@ class AnalysisDialog:
         self.dialog.destroy()
 
 class ModernAnnotationDialog:
-    """Modern annotation dialog with inline editing"""
+    """Modern annotation dialog with inline editing and vacuum templates"""
     def __init__(self, parent, annotation_manager, figure=None, ax=None):
         self.parent = parent
         self.annotation_manager = annotation_manager
         self.figure = figure
         self.ax = ax
         self.selected_annotation = None
+        self.dragging = False
+        self.drag_data = None
         
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Annotations")
@@ -2383,7 +2751,7 @@ class ModernAnnotationDialog:
             ("▭ Shaded Region", self.add_region),
             ("● Point Marker", self.add_point),
             ("T Text Label", self.add_text),
-            ("→ Arrow", self.add_arrow),
+            ("→ Enhanced Arrow", self.add_enhanced_arrow),
         ]
         
         for text, command in buttons:
@@ -2399,17 +2767,17 @@ class ModernAnnotationDialog:
             btn.bind("<Enter>", lambda e, b=btn: b.config(bg='#2980b9'))
             btn.bind("<Leave>", lambda e, b=btn: b.config(bg='#3498db'))
         
-        # Quick templates
+        # Quick templates for vacuum analysis
         ttk.Separator(parent, orient='horizontal').pack(fill='x', pady=20)
         
-        ttk.Label(parent, text="Quick Templates", 
+        ttk.Label(parent, text="Vacuum Templates", 
                  font=('Segoe UI', 12, 'bold')).pack(pady=(0, 10))
         
         templates = [
-            ("📊 Add Statistics Box", self.add_stats_box),
-            ("📅 Mark Weekends", self.mark_weekends),
-            ("⏰ Business Hours", self.mark_business_hours),
-            ("🎯 Mark Extremes", self.mark_extremes),
+            ("🎯 Base Pressure Line", self.add_base_pressure_template),
+            ("📊 Noise Region", self.add_noise_region_template),
+            ("⚡ Spike Markers", self.add_spike_marker_template),
+            ("📉 Pressure Targets", self.add_pressure_targets_template),
         ]
         
         for text, command in templates:
@@ -2543,7 +2911,7 @@ class ModernAnnotationDialog:
         ann_type = annotation['type']
         
         if ann_type in ['vline', 'hline']:
-            # Position
+            # Position with better precision controls
             pos_frame = ttk.Frame(parent)
             pos_frame.pack(fill='x', pady=2)
             
@@ -2555,13 +2923,19 @@ class ModernAnnotationDialog:
             pos_entry.pack(side='left', padx=5)
             pos_entry.bind('<Return>', lambda e: self.update_property(ann_id, pos_key, float(pos_var.get())))
             
+            # Fine adjustment buttons
+            ttk.Button(pos_frame, text="-", width=3,
+                      command=lambda: self.adjust_position(ann_id, pos_key, -0.1)).pack(side='left', padx=1)
+            ttk.Button(pos_frame, text="+", width=3,
+                      command=lambda: self.adjust_position(ann_id, pos_key, 0.1)).pack(side='left', padx=1)
+            
             # Color
             color_btn = tk.Button(pos_frame, text="Color", bg=annotation.get('color', 'red'),
                                  command=lambda: self.change_color(ann_id))
             color_btn.pack(side='left', padx=5)
             
         elif ann_type == 'region':
-            # Start and end positions
+            # Start and end positions with better controls
             pos_frame = ttk.Frame(parent)
             pos_frame.pack(fill='x', pady=2)
             
@@ -2594,6 +2968,37 @@ class ModernAnnotationDialog:
             text_entry = ttk.Entry(text_frame, textvariable=text_var, width=30)
             text_entry.pack(side='left', padx=5)
             text_entry.bind('<Return>', lambda e: self.update_property(ann_id, 'text', text_var.get()))
+            
+        elif ann_type == 'arrow':
+            # Enhanced arrow controls
+            arrow_frame = ttk.Frame(parent)
+            arrow_frame.pack(fill='x', pady=2)
+            
+            # Start position
+            ttk.Label(arrow_frame, text="Start:").grid(row=0, column=0, sticky='w')
+            start_x_var = tk.StringVar(value=str(annotation.get('x_start', 0)))
+            start_y_var = tk.StringVar(value=str(annotation.get('y_start', 0)))
+            
+            ttk.Entry(arrow_frame, textvariable=start_x_var, width=10).grid(row=0, column=1, padx=2)
+            ttk.Entry(arrow_frame, textvariable=start_y_var, width=10).grid(row=0, column=2, padx=2)
+            
+            # End position
+            ttk.Label(arrow_frame, text="End:").grid(row=1, column=0, sticky='w')
+            end_x_var = tk.StringVar(value=str(annotation.get('x_end', 1)))
+            end_y_var = tk.StringVar(value=str(annotation.get('y_end', 1)))
+            
+            ttk.Entry(arrow_frame, textvariable=end_x_var, width=10).grid(row=1, column=1, padx=2)
+            ttk.Entry(arrow_frame, textvariable=end_y_var, width=10).grid(row=1, column=2, padx=2)
+            
+            def update_arrow():
+                self.annotation_manager.update_annotation(ann_id,
+                    x_start=float(start_x_var.get()),
+                    y_start=float(start_y_var.get()),
+                    x_end=float(end_x_var.get()),
+                    y_end=float(end_y_var.get()))
+                self.refresh_plot()
+            
+            ttk.Button(arrow_frame, text="Update", command=update_arrow).grid(row=2, column=1, columnspan=2, pady=5)
         
         # Label (common to all)
         if ann_type != 'text':
@@ -2605,6 +3010,15 @@ class ModernAnnotationDialog:
             label_entry = ttk.Entry(label_frame, textvariable=label_var, width=25)
             label_entry.pack(side='left', padx=5)
             label_entry.bind('<Return>', lambda e: self.update_property(ann_id, 'label', label_var.get()))
+    
+    def adjust_position(self, ann_id, pos_key, delta):
+        """Fine adjust position"""
+        annotation = self.annotation_manager.annotations.get(ann_id)
+        if annotation:
+            current_pos = annotation.get(pos_key, 0)
+            self.annotation_manager.update_annotation(ann_id, **{pos_key: current_pos + delta})
+            self.update_annotation_list()
+            self.refresh_plot()
     
     def select_annotation(self, ann_id):
         """Select an annotation"""
@@ -2738,15 +3152,17 @@ class ModernAnnotationDialog:
         self.select_annotation(ann_id)
         self.refresh_plot()
     
-    def add_arrow(self):
-        """Add arrow annotation"""
+    def add_enhanced_arrow(self):
+        """Add enhanced arrow annotation with better defaults"""
         if self.ax:
             xlim = self.ax.get_xlim()
             ylim = self.ax.get_ylim()
-            x_start = xlim[0] + (xlim[1] - xlim[0]) * 0.3
-            y_start = ylim[0] + (ylim[1] - ylim[0]) * 0.7
-            x_end = xlim[0] + (xlim[1] - xlim[0]) * 0.6
-            y_end = ylim[0] + (ylim[1] - ylim[0]) * 0.4
+            
+            # Create arrow pointing from upper left to center
+            x_start = xlim[0] + (xlim[1] - xlim[0]) * 0.2
+            y_start = ylim[0] + (ylim[1] - ylim[0]) * 0.8
+            x_end = xlim[0] + (xlim[1] - xlim[0]) * 0.5
+            y_end = ylim[0] + (ylim[1] - ylim[0]) * 0.5
         else:
             x_start, y_start, x_end, y_end = 0, 1, 1, 0
         
@@ -2757,28 +3173,166 @@ class ModernAnnotationDialog:
             y_end=y_end,
             style='->',
             color='#2c3e50',
-            width=2)
+            width=2,
+            label="Arrow")
         
         self.update_annotation_list()
         self.select_annotation(ann_id)
         self.refresh_plot()
     
-    def add_stats_box(self):
-        """Add statistics box template"""
-        # This would analyze the current data and add a text box with statistics
-        messagebox.showinfo("Info", "Statistics box feature coming soon!")
+    # Vacuum-specific templates
+    def add_base_pressure_template(self):
+        """Add base pressure line template"""
+        if self.ax:
+            ylim = self.ax.get_ylim()
+            # Estimate base pressure as lower 10% of range
+            base_pressure = ylim[0] + (ylim[1] - ylim[0]) * 0.1
+        else:
+            base_pressure = 1e-6
+        
+        ann_id = self.annotation_manager.add_annotation('hline',
+            y_pos=base_pressure,
+            label=f"Base Pressure: {base_pressure:.2e} mbar",
+            color='green',
+            style='--',
+            width=2,
+            alpha=0.8)
+        
+        self.update_annotation_list()
+        self.select_annotation(ann_id)
+        self.refresh_plot()
+        
+        messagebox.showinfo("Template Added", 
+                          "Base pressure line added. Adjust the position to match your measured base pressure.")
     
-    def mark_weekends(self):
-        """Mark weekends template"""
-        messagebox.showinfo("Info", "Weekend marking feature coming soon!")
+    def add_noise_region_template(self):
+        """Add noise analysis region template"""
+        if self.ax:
+            xlim = self.ax.get_xlim()
+            # Create region in middle third
+            span = xlim[1] - xlim[0]
+            x_start = xlim[0] + span * 0.33
+            x_end = xlim[0] + span * 0.67
+        else:
+            x_start, x_end = 100, 200
+        
+        ann_id = self.annotation_manager.add_annotation('region',
+            x_start=x_start,
+            x_end=x_end,
+            label="Noise Analysis Region",
+            color='purple',
+            alpha=0.2)
+        
+        self.update_annotation_list()
+        self.select_annotation(ann_id)
+        self.refresh_plot()
+        
+        messagebox.showinfo("Template Added", 
+                          "Noise analysis region added. Adjust to cover a stable pressure region.")
     
-    def mark_business_hours(self):
-        """Mark business hours template"""
-        messagebox.showinfo("Info", "Business hours marking feature coming soon!")
+    def add_spike_marker_template(self):
+        """Add spike marker template"""
+        if self.ax:
+            xlim = self.ax.get_xlim()
+            ylim = self.ax.get_ylim()
+            x_pos = xlim[0] + (xlim[1] - xlim[0]) * 0.5
+            y_pos = ylim[0] + (ylim[1] - ylim[0]) * 0.9
+        else:
+            x_pos, y_pos = 50, 1e-3
+        
+        ann_id = self.annotation_manager.add_annotation('point',
+            x_pos=x_pos,
+            y_pos=y_pos,
+            label="Pressure Spike",
+            marker='^',
+            size=150,
+            color='red')
+        
+        self.update_annotation_list()
+        self.select_annotation(ann_id)
+        self.refresh_plot()
+        
+        messagebox.showinfo("Template Added", 
+                          "Spike marker added. Move to actual spike locations.")
     
-    def mark_extremes(self):
-        """Mark extreme values template"""
-        messagebox.showinfo("Info", "Extreme values marking feature coming soon!")
+    def add_pressure_targets_template(self):
+        """Add common vacuum pressure target lines"""
+        targets = [
+            (1e-3, "High Vacuum", 'blue'),
+            (1e-6, "Ultra-High Vacuum", 'green'),
+            (1e-9, "Extreme High Vacuum", 'purple')
+        ]
+        
+        added_count = 0
+        for pressure, label, color in targets:
+            # Only add if within current plot range
+            if self.ax:
+                ylim = self.ax.get_ylim()
+                if ylim[0] <= pressure <= ylim[1]:
+                    self.annotation_manager.add_annotation('hline',
+                        y_pos=pressure,
+                        label=f"{label}: {pressure:.0e} mbar",
+                        color=color,
+                        style=':',
+                        width=1.5,
+                        alpha=0.6)
+                    added_count += 1
+            else:
+                self.annotation_manager.add_annotation('hline',
+                    y_pos=pressure,
+                    label=f"{label}: {pressure:.0e} mbar",
+                    color=color,
+                    style=':',
+                    width=1.5,
+                    alpha=0.6)
+                added_count += 1
+        
+        self.update_annotation_list()
+        self.refresh_plot()
+        
+        messagebox.showinfo("Template Added", 
+                          f"Added {added_count} pressure target lines.")
+    
+    def setup_interactive_editing(self):
+        """Set up interactive annotation editing on the plot"""
+        self.selected_artist = None
+        self.drag_start = None
+        
+        def on_pick(event):
+            """Handle picking annotations on the plot"""
+            if hasattr(event, 'artist') and self.figure:
+                self.selected_artist = event.artist
+                # Store original position for dragging
+                if hasattr(event.artist, 'get_xydata'):
+                    self.drag_start = event.artist.get_xydata()
+                elif hasattr(event.artist, 'get_offsets'):
+                    self.drag_start = event.artist.get_offsets()
+        
+        def on_motion(event):
+            """Handle mouse motion for dragging annotations"""
+            if self.selected_artist and event.inaxes and self.dragging:
+                # Update annotation position based on type
+                # This would need to be implemented based on annotation type
+                pass
+        
+        def on_press(event):
+            """Handle mouse press"""
+            if self.selected_artist and event.inaxes:
+                self.dragging = True
+                self.drag_data = {'start_x': event.xdata, 'start_y': event.ydata}
+        
+        def on_release(event):
+            """Handle mouse release after dragging"""
+            self.dragging = False
+            self.selected_artist = None
+            self.drag_data = None
+        
+        # Connect event handlers
+        if self.figure:
+            self.figure.canvas.mpl_connect('pick_event', on_pick)
+            self.figure.canvas.mpl_connect('motion_notify_event', on_motion)
+            self.figure.canvas.mpl_connect('button_press_event', on_press)
+            self.figure.canvas.mpl_connect('button_release_event', on_release)
     
     def clear_all(self):
         """Clear all annotations"""
@@ -2830,34 +3384,6 @@ class ModernAnnotationDialog:
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to import: {str(e)}")
     
-    def setup_interactive_editing(self):
-        """Set up interactive annotation editing on the plot"""
-        self.selected_artist = None
-        
-        def on_pick(event):
-            """Handle picking annotations on the plot"""
-            if hasattr(event, 'artist'):
-                # Find which annotation was picked
-                for ann_id, annotation in self.annotation_manager.annotations.items():
-                    # Match the picked artist to an annotation
-                    # This would need to be implemented based on how artists are tracked
-                    pass
-        
-        def on_motion(event):
-            """Handle mouse motion for dragging annotations"""
-            if self.selected_artist and event.inaxes:
-                # Update annotation position based on mouse movement
-                pass
-        
-        def on_release(event):
-            """Handle mouse release after dragging"""
-            self.selected_artist = None
-        
-        # Connect event handlers
-        self.figure.canvas.mpl_connect('pick_event', on_pick)
-        self.figure.canvas.mpl_connect('motion_notify_event', on_motion)
-        self.figure.canvas.mpl_connect('button_release_event', on_release)
-    
     def refresh_plot(self):
         """Refresh the plot with updated annotations"""
         if hasattr(self.parent, 'refresh_plot'):
@@ -2871,391 +3397,6 @@ class ModernAnnotationDialog:
     def cancel(self):
         """Cancel and close dialog"""
         self.dialog.destroy()
-
-class DataQualityLayer:
-    """Represents a visual layer for data quality issues"""
-    
-    def __init__(self, name, issue_type, visible=True):
-        self.name = name
-        self.issue_type = issue_type
-        self.visible = visible
-        self.color_map = {
-            'missing': '#e74c3c',     # Red
-            'outliers': '#f39c12',    # Orange
-            'gaps': '#9b59b6',        # Purple
-            'duplicates': '#3498db',  # Blue
-            'noise': '#e67e22',       # Dark orange
-            'anomalies': '#c0392b'    # Dark red
-        }
-        self.alpha = 0.6
-        self.style = 'highlight'  # highlight, annotate, or filter
-    
-    def apply_to_plot(self, ax, x_data, y_data, issues):
-        """Apply this quality layer to the plot"""
-        if not self.visible:
-            return
-        
-        issue_data = issues.get(self.issue_type, {})
-        color = self.color_map.get(self.issue_type, '#e74c3c')
-        
-        if self.issue_type == 'missing':
-            self._highlight_missing(ax, x_data, y_data, issue_data, color)
-        elif self.issue_type == 'outliers':
-            self._highlight_outliers(ax, x_data, y_data, issue_data, color)
-        elif self.issue_type == 'gaps':
-            self._highlight_gaps(ax, x_data, y_data, issue_data, color)
-        elif self.issue_type == 'duplicates':
-            self._highlight_duplicates(ax, x_data, y_data, issue_data, color)
-        elif self.issue_type == 'noise':
-            self._highlight_noise(ax, x_data, y_data, issue_data, color)
-        elif self.issue_type == 'anomalies':
-            self._highlight_anomalies(ax, x_data, y_data, issue_data, color)
-    
-    def _highlight_missing(self, ax, x_data, y_data, issue_data, color):
-        """Highlight missing data regions"""
-        for region in issue_data.get('regions', []):
-            start, end = region['start'], region['end']
-            
-            if self.style == 'highlight':
-                # Add shaded region
-                if start > 0 and end < len(x_data) - 1:
-                    x_start = x_data.iloc[start-1] if hasattr(x_data, 'iloc') else x_data[start-1]
-                    x_end = x_data.iloc[end+1] if hasattr(x_data, 'iloc') else x_data[end+1]
-                    ax.axvspan(x_start, x_end, alpha=self.alpha, color=color, 
-                             label=f'Missing Data ({region["count"]} points)')
-            
-            elif self.style == 'annotate':
-                # Add text annotation
-                if region['severity'] == 'high':
-                    mid_point = (start + end) // 2
-                    if mid_point < len(x_data):
-                        x_pos = x_data.iloc[mid_point] if hasattr(x_data, 'iloc') else x_data[mid_point]
-                        ax.annotate(f'Missing\n{region["count"]} pts', 
-                                  xy=(x_pos, ax.get_ylim()[1] * 0.95),
-                                  xytext=(0, 10), textcoords='offset points',
-                                  ha='center', fontsize=9,
-                                  bbox=dict(boxstyle='round,pad=0.3', fc=color, alpha=0.7),
-                                  arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0'))
-    
-    def _highlight_outliers(self, ax, x_data, y_data, issue_data, color):
-        """Highlight outlier points"""
-        indices = issue_data.get('indices', [])
-        if not indices:
-            return
-        
-        outlier_x = [x_data.iloc[i] if hasattr(x_data, 'iloc') else x_data[i] for i in indices if i < len(x_data)]
-        outlier_y = [y_data.iloc[i] if hasattr(y_data, 'iloc') else y_data[i] for i in indices if i < len(y_data)]
-        
-        if self.style == 'highlight':
-            # Circle outliers
-            ax.scatter(outlier_x, outlier_y, s=100, facecolors='none', 
-                      edgecolors=color, linewidths=2, label='Outliers', zorder=10)
-        
-        elif self.style == 'annotate':
-            # Annotate severe outliers
-            severities = issue_data.get('severity', [])
-            for i, (x, y, severity) in enumerate(zip(outlier_x, outlier_y, severities)):
-                if severity == 'extreme':
-                    ax.annotate('!', xy=(x, y), xytext=(5, 5), 
-                              textcoords='offset points', fontsize=12,
-                              color=color, fontweight='bold')
-    
-    def _highlight_gaps(self, ax, x_data, y_data, issue_data, color):
-        """Highlight data gaps"""
-        gaps = issue_data.get('gaps', [])
-        
-        for gap in gaps:
-            if gap['severity'] == 'high':
-                start_idx = gap['start_idx']
-                end_idx = gap['end_idx']
-                
-                if start_idx < len(x_data) and end_idx < len(x_data):
-                    x1 = x_data.iloc[start_idx] if hasattr(x_data, 'iloc') else x_data[start_idx]
-                    x2 = x_data.iloc[end_idx] if hasattr(x_data, 'iloc') else x_data[end_idx]
-                    
-                    # Draw attention to gap
-                    ax.axvspan(x1, x2, alpha=self.alpha * 0.5, color=color, 
-                             linestyle='--', label='Data Gap')
-    
-    def _highlight_duplicates(self, ax, x_data, y_data, issue_data, color):
-        """Highlight duplicate points"""
-        groups = issue_data.get('groups', [])
-        
-        for group in groups:
-            if group['count'] > 2:  # Only highlight significant duplicates
-                indices = group['indices']
-                x_val, y_val = group['value']
-                
-                # Add marker at duplicate location
-                ax.plot(x_val, y_val, 'X', markersize=12, color=color, 
-                       label=f'Duplicate ({group["count"]}x)', zorder=10)
-    
-    def _highlight_noise(self, ax, x_data, y_data, issue_data, color):
-        """Highlight noisy regions"""
-        regions = issue_data.get('regions', [])
-        
-        for region in regions:
-            if region['severity'] == 'high':
-                start, end = region['start'], region['end']
-                
-                if start < len(x_data) and end < len(x_data):
-                    x_start = x_data.iloc[start] if hasattr(x_data, 'iloc') else x_data[start]
-                    x_end = x_data.iloc[end] if hasattr(x_data, 'iloc') else x_data[end]
-                    
-                    # Add translucent overlay
-                    ax.axvspan(x_start, x_end, alpha=self.alpha * 0.3, 
-                             color=color, label='High Noise Region')
-    
-    def _highlight_anomalies(self, ax, x_data, y_data, issue_data, color):
-        """Highlight anomalous points"""
-        anomalies = issue_data.get('anomalies', [])
-        
-        if anomalies:
-            anomaly_x = [a['x'] for a in anomalies]
-            anomaly_y = [a['y'] for a in anomalies]
-            
-            # Star markers for anomalies
-            ax.scatter(anomaly_x, anomaly_y, marker='*', s=200, 
-                      color=color, edgecolor='black', linewidth=1,
-                      label='Anomalies', zorder=11)
-
-class LayerManager:
-    """Manages multiple visual layers for data quality and annotations"""
-    
-    def __init__(self):
-        self.layers = {}
-        self.layer_order = []
-    
-    def add_quality_layer(self, name, issue_type, visible=True):
-        """Add a data quality layer"""
-        layer = DataQualityLayer(name, issue_type, visible)
-        self.layers[name] = layer
-        if name not in self.layer_order:
-            self.layer_order.append(name)
-        return layer
-    
-    def remove_layer(self, name):
-        """Remove a layer"""
-        if name in self.layers:
-            del self.layers[name]
-            self.layer_order.remove(name)
-    
-    def reorder_layers(self, new_order):
-        """Reorder layers"""
-        self.layer_order = [name for name in new_order if name in self.layers]
-    
-    def toggle_layer(self, name):
-        """Toggle layer visibility"""
-        if name in self.layers:
-            self.layers[name].visible = not self.layers[name].visible
-    
-    def apply_layers(self, ax, x_data, y_data, series_name=""):
-        """Apply all active layers to the plot"""
-        # For now, just return without applying layers
-        # Full implementation would analyze data quality here
-        pass
-
-class ModernLayerControlPanel:
-    """Modern UI panel for controlling data quality layers"""
-    
-    def __init__(self, parent, layer_manager, update_callback):
-        self.parent = parent
-        self.layer_manager = layer_manager
-        self.update_callback = update_callback
-        
-        # Create the panel and make it accessible
-        self.panel = self.create_panel()
-    
-    def create_panel(self):
-        """Create the layer control panel"""
-        # Main frame with modern styling
-        self.panel = tk.Frame(self.parent, bg='#2c3e50', relief='flat')
-        self.panel.pack(fill='both', expand=True)
-        
-        # Header
-        header = tk.Frame(self.panel, bg='#34495e', height=40)
-        header.pack(fill='x')
-        header.pack_propagate(False)
-        
-        tk.Label(header, text="🎨 Data Quality Layers", 
-                font=('Segoe UI', 12, 'bold'), 
-                fg='white', bg='#34495e').pack(side='left', padx=10, pady=10)
-        
-        # Add layer button
-        add_btn = tk.Button(header, text="+ Add Layer", 
-                          command=self.add_layer_dialog,
-                          bg='#3498db', fg='white',
-                          font=('Segoe UI', 10),
-                          relief='flat', cursor='hand2')
-        add_btn.pack(side='right', padx=10, pady=5)
-        
-        # Layer list container
-        self.layer_container = tk.Frame(self.panel, bg='#ecf0f1')
-        self.layer_container.pack(fill='both', expand=True, padx=5, pady=5)
-        
-        # Initialize with default layers
-        self.initialize_default_layers()
-        self.update_layer_display()
-
-        return self.panel
-    
-    def initialize_default_layers(self):
-        """Add default quality layers"""
-        default_layers = [
-            ("Missing Data", "missing"),
-            ("Outliers", "outliers"),
-            ("Data Gaps", "gaps"),
-            ("Duplicates", "duplicates"),
-            ("Noise Regions", "noise"),
-            ("Anomalies", "anomalies")
-        ]
-        
-        for name, issue_type in default_layers:
-            self.layer_manager.add_quality_layer(name, issue_type, visible=False)
-    
-    def update_layer_display(self):
-        """Update the layer list display"""
-        # Clear existing
-        for widget in self.layer_container.winfo_children():
-            widget.destroy()
-        
-        # Add layer items
-        for i, layer_name in enumerate(self.layer_manager.layer_order):
-            layer = self.layer_manager.layers[layer_name]
-            self.create_layer_item(i, layer_name, layer)
-    
-    def create_layer_item(self, index, name, layer):
-        """Create a single layer control item"""
-        # Layer item frame
-        item = tk.Frame(self.layer_container, bg='white', relief='solid', 
-                       borderwidth=1, height=60)
-        item.pack(fill='x', pady=2)
-        item.pack_propagate(False)
-        
-        # Drag handle
-        handle = tk.Label(item, text="≡", font=('Segoe UI', 12), 
-                         bg='#bdc3c7', width=3, cursor='hand2')
-        handle.pack(side='left', fill='y')
-        
-        # Layer info
-        info_frame = tk.Frame(item, bg='white')
-        info_frame.pack(side='left', fill='both', expand=True, padx=10)
-        
-        # Layer name and type
-        name_label = tk.Label(info_frame, text=name, 
-                            font=('Segoe UI', 11, 'bold'), 
-                            bg='white', anchor='w')
-        name_label.pack(fill='x', pady=(5, 0))
-        
-        type_label = tk.Label(info_frame, text=f"Type: {layer.issue_type}", 
-                            font=('Segoe UI', 9), 
-                            fg='#7f8c8d', bg='white', anchor='w')
-        type_label.pack(fill='x')
-        
-        # Controls
-        control_frame = tk.Frame(item, bg='white')
-        control_frame.pack(side='right', padx=10)
-        
-        # Visibility toggle
-        vis_var = tk.BooleanVar(value=layer.visible)
-        vis_check = tk.Checkbutton(control_frame, text="Visible", 
-                                  variable=vis_var, 
-                                  command=lambda: self.toggle_visibility(name, vis_var.get()),
-                                  bg='white', font=('Segoe UI', 9))
-        vis_check.pack(side='left', padx=5)
-        
-        # Style selector
-        style_var = tk.StringVar(value=layer.style)
-        style_menu = ttk.Combobox(control_frame, textvariable=style_var,
-                                 values=['highlight', 'annotate', 'filter'],
-                                 state='readonly', width=10)
-        style_menu.pack(side='left', padx=5)
-        style_menu.bind('<<ComboboxSelected>>', 
-                       lambda e: self.change_style(name, style_var.get()))
-        
-        # Color button
-        color_btn = tk.Button(control_frame, text="", 
-                            bg=layer.color_map.get(layer.issue_type, '#e74c3c'),
-                            width=3, relief='raised',
-                            command=lambda: self.change_color(name))
-        color_btn.pack(side='left', padx=5)
-        
-        # Delete button
-        del_btn = tk.Button(control_frame, text="×", 
-                          fg='#e74c3c', bg='white',
-                          font=('Segoe UI', 12, 'bold'),
-                          relief='flat', cursor='hand2',
-                          command=lambda: self.delete_layer(name))
-        del_btn.pack(side='left', padx=2)
-    
-    def toggle_visibility(self, layer_name, visible):
-        """Toggle layer visibility"""
-        self.layer_manager.layers[layer_name].visible = visible
-        self.update_callback()
-    
-    def change_style(self, layer_name, style):
-        """Change layer display style"""
-        self.layer_manager.layers[layer_name].style = style
-        self.update_callback()
-    
-    def change_color(self, layer_name):
-        """Change layer color"""
-        layer = self.layer_manager.layers[layer_name]
-        current_color = layer.color_map.get(layer.issue_type, '#e74c3c')
-        
-        color = colorchooser.askcolor(initialcolor=current_color)
-        if color[1]:
-            layer.color_map[layer.issue_type] = color[1]
-            self.update_layer_display()
-            self.update_callback()
-    
-    def delete_layer(self, layer_name):
-        """Delete a layer"""
-        if messagebox.askyesno("Confirm", f"Delete layer '{layer_name}'?"):
-            self.layer_manager.remove_layer(layer_name)
-            self.update_layer_display()
-            self.update_callback()
-    
-    def add_layer_dialog(self):
-        """Show dialog to add new layer"""
-        dialog = tk.Toplevel(self.parent)
-        dialog.title("Add Quality Layer")
-        dialog.geometry("400x300")
-        dialog.transient(self.parent)
-        dialog.grab_set()
-        
-        # Layer name
-        tk.Label(dialog, text="Layer Name:", font=('Segoe UI', 10)).pack(pady=10)
-        name_var = tk.StringVar()
-        ttk.Entry(dialog, textvariable=name_var, width=30).pack(pady=5)
-        
-        # Issue type
-        tk.Label(dialog, text="Issue Type:", font=('Segoe UI', 10)).pack(pady=10)
-        type_var = tk.StringVar()
-        type_combo = ttk.Combobox(dialog, textvariable=type_var,
-                                 values=['missing', 'outliers', 'gaps', 
-                                        'duplicates', 'noise', 'anomalies'],
-                                 state='readonly', width=30)
-        type_combo.pack(pady=5)
-        
-        # Buttons
-        btn_frame = ttk.Frame(dialog)
-        btn_frame.pack(pady=20)
-        
-        ttk.Button(btn_frame, text="Add", 
-                  command=lambda: self.add_layer(name_var.get(), type_var.get(), dialog)).pack(side='left', padx=5)
-        ttk.Button(btn_frame, text="Cancel", 
-                  command=dialog.destroy).pack(side='left', padx=5)
-    
-    def add_layer(self, name, issue_type, dialog):
-        """Add a new layer"""
-        if name and issue_type:
-            self.layer_manager.add_quality_layer(name, issue_type)
-            self.update_layer_display()
-            self.update_callback()
-            dialog.destroy()
-        else:
-            messagebox.showerror("Error", "Please provide both name and type")
 
 class LivePreviewPanel:
     """Panel showing live preview of changes"""
@@ -3363,7 +3504,7 @@ class ProfessionalMultiFileExcelPlotter(ctk.CTk):
         super().__init__()
         
         # Initialize modern UI settings
-        self.title("Professional Multi-File Excel Data Plotter v4.0")
+        self.title("Professional Multi-File Excel Data Plotter v4.2")
         self.geometry("1600x900")
         self.minsize(1200, 700)
         self.grid_rowconfigure(0, weight=1)
@@ -3381,9 +3522,9 @@ class ProfessionalMultiFileExcelPlotter(ctk.CTk):
                            '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
         
         # Initialize managers
-        self.layer_manager = LayerManager()
         self.annotation_manager = ModernAnnotationManager()
         self.analysis_tools = DataAnalysisTools()
+        self.vacuum_tools = VacuumAnalysisTools()
         
         # Initialize plot configuration variables
         self.title_var = tk.StringVar(value="Multi-File Data Analysis")
@@ -3444,28 +3585,30 @@ class ProfessionalMultiFileExcelPlotter(ctk.CTk):
         self.create_floating_panels()
 
     def create_top_bar(self):
-        """Create the top action bar"""
+        """Create the top action bar with rearranged buttons"""
         self.top_bar = QuickActionBar(self.main_container)
         self.top_bar.grid(row=0, column=0, sticky="ew")
 
-        # File actions
-        self.top_bar.add_action("Add Files", "📁", self.add_files, "Load Excel/CSV files")
-        self.top_bar.add_action("Save Project", "💾", self.save_project, "Save current project")
-        self.top_bar.add_separator()
+        # File actions (left side)
+        self.top_bar.add_action("Add Files", "📁", self.add_files, "Load Excel/CSV files", side="left")
+        self.top_bar.add_action("Load Project", "📂", self.load_project, "Load saved project", side="left")
+        self.top_bar.add_action("Save Project", "💾", self.save_project, "Save current project", side="left")
+        self.top_bar.add_separator(side="left")
 
-        # Plot actions - Now the method exists before it's referenced
-        self.top_bar.add_action("Generate Plot", "📊", self.create_plot, "Create plot from series")
-        self.top_bar.add_action("Export", "📤", self.show_export_dialog, "Export plot or data")
-        self.top_bar.add_separator()
+        # Plot actions (right side)
+        self.top_bar.add_action("Generate Plot", "📊", self.create_plot, "Create plot from series", side="right")
+        self.top_bar.add_action("Export", "📤", self.show_export_dialog, "Export plot or data", side="right")
+        self.top_bar.add_separator(side="right")
 
-        # Analysis actions
-        self.top_bar.add_action("Analysis", "🔬", self.show_analysis_panel, "Data analysis tools")
-        self.top_bar.add_action("Annotations", "📍", self.show_annotation_panel, "Manage annotations")
-        self.top_bar.add_separator()
+        # Analysis actions (center)
+        self.top_bar.add_action("Analysis", "🔬", self.show_analysis_panel, "Data analysis tools", side="center")
+        self.top_bar.add_action("Vacuum Tools", "🎯", self.show_vacuum_analysis, "Vacuum analysis tools", side="center")
+        self.top_bar.add_action("Annotations", "📍", self.show_annotation_panel, "Manage annotations", side="center")
+        self.top_bar.add_separator(side="center")
 
-        # View actions
-        self.top_bar.add_action("Theme", "🎨", self.toggle_theme, "Toggle dark/light theme")
-        self.top_bar.add_action("Layout", "📐", self.cycle_layout, "Change layout mode")
+        # View actions (center)
+        self.top_bar.add_action("Theme", "🎨", self.toggle_theme, "Toggle dark/light theme", side="center")
+        self.top_bar.add_action("Layout", "📐", self.cycle_layout, "Change layout mode", side="center")
 
     def create_main_content(self):
         """Create the main content area with adaptive layout"""
@@ -3499,13 +3642,11 @@ class ProfessionalMultiFileExcelPlotter(ctk.CTk):
         self.series_tab = self.sidebar_tabs.add("Series")
         self.config_tab = self.sidebar_tabs.add("Configuration")
         self.export_tab = self.sidebar_tabs.add("Export")
-        self.layer_tab = self.sidebar_tabs.add("Quality Layers")
 
         self.create_files_panel()
         self.create_series_panel()
         self.create_config_panel()
         self.create_export_panel()
-        self.create_layer_panel()
 
         # Main plot area
         self.plot_frame = ctk.CTkFrame(self.content_frame)
@@ -3534,14 +3675,12 @@ class ProfessionalMultiFileExcelPlotter(ctk.CTk):
         self.plot_tab = self.main_tabs.add("Plot")
         self.config_tab = self.main_tabs.add("Config")
         self.export_tab = self.main_tabs.add("Export")
-        self.layer_tab = self.main_tabs.add("Layers")
 
         self.create_files_panel()
         self.create_series_panel()
         self.create_plot_area_compact()
         self.create_config_panel()
         self.create_export_panel()
-        self.create_layer_panel()
 
     def create_files_panel(self):
         """Create the files management panel"""
@@ -3603,18 +3742,29 @@ class ProfessionalMultiFileExcelPlotter(ctk.CTk):
         )
         self.series_file_combo.grid(row=0, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
 
+        # Advanced data selection button
+        self.data_select_btn = ctk.CTkButton(
+            content,
+            text="Advanced Selection",
+            command=self.show_advanced_data_selector,
+            width=120
+        )
+        self.data_select_btn.grid(row=0, column=3, padx=5, pady=5)
+
         # Column selection
         ctk.CTkLabel(content, text="X Column:").grid(row=1, column=0, sticky="w", padx=5, pady=5)
         self.series_x_var = tk.StringVar()
-        self.series_x_combo = ctk.CTkComboBox(content, variable=self.series_x_var, width=120)
+        self.series_x_combo = ctk.CTkComboBox(content, variable=self.series_x_var, width=120,
+                                             command=lambda x: self.update_series_range_limits())
         self.series_x_combo.grid(row=1, column=1, sticky="ew", padx=5, pady=5)
 
         ctk.CTkLabel(content, text="Y Column:").grid(row=1, column=2, sticky="w", padx=5, pady=5)
         self.series_y_var = tk.StringVar()
-        self.series_y_combo = ctk.CTkComboBox(content, variable=self.series_y_var, width=120)
+        self.series_y_combo = ctk.CTkComboBox(content, variable=self.series_y_var, width=120,
+                                             command=lambda x: self.update_series_range_limits())
         self.series_y_combo.grid(row=1, column=3, sticky="ew", padx=5, pady=5)
 
-        # Range selection
+        # Range selection with dynamic limits
         ctk.CTkLabel(content, text="Start:").grid(row=2, column=0, sticky="w", padx=5, pady=5)
         self.series_start_var = tk.IntVar(value=0)
         self.series_start_entry = ctk.CTkEntry(content, textvariable=self.series_start_var, width=80)
@@ -3625,18 +3775,22 @@ class ProfessionalMultiFileExcelPlotter(ctk.CTk):
         self.series_end_entry = ctk.CTkEntry(content, textvariable=self.series_end_var, width=80)
         self.series_end_entry.grid(row=2, column=3, sticky="w", padx=5, pady=5)
 
+        # Range info label
+        self.range_info_label = ctk.CTkLabel(content, text="", text_color=("gray60", "gray40"))
+        self.range_info_label.grid(row=3, column=0, columnspan=4, pady=5)
+
         # Series name
-        ctk.CTkLabel(content, text="Name:").grid(row=3, column=0, sticky="w", padx=5, pady=5)
+        ctk.CTkLabel(content, text="Name:").grid(row=4, column=0, sticky="w", padx=5, pady=5)
         self.series_name_var = tk.StringVar(value="New Series")
         self.series_name_entry = ctk.CTkEntry(content, textvariable=self.series_name_var, width=200)
-        self.series_name_entry.grid(row=3, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
+        self.series_name_entry.grid(row=4, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
 
         ctk.CTkButton(
             content,
             text="Add Series",
             command=self.add_series,
             fg_color=ColorPalette.SUCCESS
-        ).grid(row=3, column=3, padx=5, pady=5)
+        ).grid(row=4, column=3, padx=5, pady=5)
 
         content.grid_columnconfigure(1, weight=1)
         content.grid_columnconfigure(3, weight=1)
@@ -3846,16 +4000,6 @@ class ProfessionalMultiFileExcelPlotter(ctk.CTk):
         ctk.CTkButton(export_frame, text="Export Series Config", command=self.export_series_config,
                      fg_color=ColorPalette.SECONDARY).pack(fill="x", pady=2)
 
-    def create_layer_panel(self):
-        """Create data quality layers panel"""
-        self.layer_control = ModernLayerControlPanel(
-            self.layer_tab, 
-            self.layer_manager,
-            self.refresh_plot
-        )
-        # Pack the panel instead of the controller
-        self.layer_control.panel.pack(fill="both", expand=True, padx=10, pady=10)
-
     def create_plot_area(self):
         """Create the main plot area"""
         # Welcome message for empty state
@@ -3864,7 +4008,7 @@ class ProfessionalMultiFileExcelPlotter(ctk.CTk):
 
         welcome_label = ctk.CTkLabel(
             self.empty_plot_frame,
-            text="Professional Multi-File Excel Data Plotter\n\nLoad multiple Excel files and create custom series ranges\nfor comprehensive data visualization and analysis.",
+            text="Professional Multi-File Excel Data Plotter\nVacuum Analysis Edition\n\nLoad multiple Excel files and create custom series ranges\nfor comprehensive vacuum data visualization and analysis.",
             font=("", 18),
             text_color=("gray40", "gray60")
         )
@@ -3895,6 +4039,123 @@ class ProfessionalMultiFileExcelPlotter(ctk.CTk):
         self.annotation_panel.withdraw()
 
     # ====================== Professional Methods ======================
+
+    def show_advanced_data_selector(self):
+        """Show advanced data selector for non-standard Excel layouts"""
+        if not self.series_file_var.get():
+            self.status_bar.set_status("Please select a source file first", "warning")
+            return
+        
+        # Find the selected file
+        selection = self.series_file_var.get()
+        file_id = selection.split('(')[-1].rstrip(')')
+        matching_file = None
+        for fid, fdata in self.loaded_files.items():
+            if fid.startswith(file_id):
+                matching_file = fdata
+                break
+        
+        if not matching_file:
+            return
+        
+        # Create selector dialog
+        selector_dialog = ctk.CTkToplevel(self)
+        selector_dialog.title("Advanced Data Selection")
+        selector_dialog.geometry("800x600")
+        selector_dialog.transient(self)
+        selector_dialog.grab_set()
+        
+        # Create the selector
+        selector = ImprovedDataSelector(
+            selector_dialog, 
+            matching_file,
+            on_data_selected=lambda info: self.apply_advanced_selection(info, selector_dialog)
+        )
+        selector.pack(fill="both", expand=True)
+
+    def apply_advanced_selection(self, selection_info, dialog):
+        """Apply the advanced data selection"""
+        try:
+            # Update column combos based on selection
+            header_row = selection_info['header_row']
+            selected_columns = selection_info['selected_columns']
+            
+            # Update the series configuration
+            self.series_start_var.set(selection_info['start_row'])
+            self.series_end_var.set(selection_info['end_row'])
+            
+            # Close dialog
+            dialog.destroy()
+            
+            self.status_bar.set_status("Advanced selection applied", "success")
+            
+        except Exception as e:
+            self.status_bar.set_status(f"Selection error: {str(e)}", "error")
+
+    def update_series_range_limits(self):
+        """Update the range limits based on selected columns"""
+        selection = self.series_file_var.get()
+        if not selection:
+            return
+        
+        try:
+            # Extract file ID from selection
+            file_id = selection.split('(')[-1].rstrip(')')
+            
+            # Find matching file
+            matching_file = None
+            for fid, fdata in self.loaded_files.items():
+                if fid.startswith(file_id):
+                    matching_file = fdata
+                    break
+            
+            if matching_file:
+                # Get selected columns
+                x_col = self.series_x_combo.get()
+                y_col = self.series_y_combo.get()
+                
+                if x_col and y_col:
+                    # Determine valid data range
+                    df = matching_file.df
+                    max_rows = len(df)
+                    
+                    # Check for non-null data in selected columns
+                    if x_col != 'Index' and x_col in df.columns:
+                        x_valid = df[x_col].notna()
+                    else:
+                        x_valid = pd.Series([True] * len(df))
+                    
+                    if y_col in df.columns:
+                        y_valid = df[y_col].notna()
+                    else:
+                        y_valid = pd.Series([True] * len(df))
+                    
+                    # Find first and last valid indices
+                    valid_mask = x_valid & y_valid
+                    if valid_mask.any():
+                        valid_indices = valid_mask[valid_mask].index
+                        first_valid = valid_indices[0]
+                        last_valid = valid_indices[-1]
+                        
+                        # Update range info
+                        self.range_info_label.configure(
+                            text=f"Valid data range: {first_valid} to {last_valid} ({len(valid_indices)} points)"
+                        )
+                        
+                        # Set default range to include all valid data
+                        if self.series_start_var.get() == 0 or self.series_start_var.get() > last_valid:
+                            self.series_start_var.set(first_valid)
+                        if self.series_end_var.get() > last_valid or self.series_end_var.get() < first_valid:
+                            self.series_end_var.set(min(last_valid + 1, max_rows))
+                    else:
+                        self.range_info_label.configure(text="No valid data in selected columns")
+                else:
+                    self.range_info_label.configure(text="Select both X and Y columns")
+                    
+        except Exception as e:
+            print(f"Range update error: {e}")
+            self.range_info_label.configure(text="")
+
     def detect_datetime_column(self, data_series):
         """Detect if a data series could be datetime without converting it"""
         try:
@@ -4033,7 +4294,24 @@ class ProfessionalMultiFileExcelPlotter(ctk.CTk):
                     'version': '1.0',
                     'creation_date': datetime.now().isoformat(),
                     'files': [],
-                    'series': []
+                    'series': [],
+                    'plot_config': {
+                        'title': self.title_var.get(),
+                        'title_size': self.title_size_var.get(),
+                        'xlabel': self.xlabel_var.get(),
+                        'xlabel_size': self.xlabel_size_var.get(),
+                        'ylabel': self.ylabel_var.get(),
+                        'ylabel_size': self.ylabel_size_var.get(),
+                        'log_scale_x': self.log_scale_x_var.get(),
+                        'log_scale_y': self.log_scale_y_var.get(),
+                        'show_grid': self.show_grid_var.get(),
+                        'show_legend': self.show_legend_var.get(),
+                        'grid_style': self.grid_style_var.get(),
+                        'grid_alpha': self.grid_alpha_var.get(),
+                        'fig_width': self.fig_width_var.get(),
+                        'fig_height': self.fig_height_var.get(),
+                        'plot_type': self.plot_type_var.get()
+                    }
                 }
                 
                 # Save file references
@@ -4063,7 +4341,10 @@ class ProfessionalMultiFileExcelPlotter(ctk.CTk):
                         'fill_area': series.fill_area,
                         'visible': series.visible,
                         'legend_label': series.legend_label,
-                        'missing_data_method': series.missing_data_method
+                        'missing_data_method': series.missing_data_method,
+                        'show_trendline': series.show_trendline,
+                        'trend_type': series.trend_type,
+                        'trend_params': series.trend_params
                     })
                 
                 with open(filename, 'w') as f:
@@ -4073,6 +4354,111 @@ class ProfessionalMultiFileExcelPlotter(ctk.CTk):
                 
             except Exception as e:
                 self.status_bar.set_status(f"Save failed: {str(e)}", "error")
+
+    def load_project(self):
+        """Load a saved project"""
+        filename = filedialog.askopenfilename(
+            title="Load Project",
+            filetypes=[("Project files", "*.json"), ("All files", "*.*")]
+        )
+        
+        if filename:
+            try:
+                with open(filename, 'r') as f:
+                    project_data = json.load(f)
+                
+                # Clear existing data
+                self.clear_all_files()
+                
+                # Load files
+                file_mapping = {}  # Map old IDs to new IDs
+                for file_info in project_data['files']:
+                    try:
+                        filepath = file_info['filepath']
+                        if os.path.exists(filepath):
+                            if filepath.endswith('.csv'):
+                                df = pd.read_csv(filepath)
+                            else:
+                                df = pd.read_excel(filepath)
+                            
+                            file_data = FileData(filepath, df)
+                            self.loaded_files[file_data.id] = file_data
+                            file_mapping[file_info['id']] = file_data.id
+                        else:
+                            self.status_bar.set_status(f"File not found: {filepath}", "warning")
+                    except Exception as e:
+                        print(f"Error loading file {filepath}: {e}")
+                
+                # Load series
+                for series_info in project_data['series']:
+                    try:
+                        # Map old file ID to new one
+                        old_file_id = series_info['file_id']
+                        if old_file_id in file_mapping:
+                            new_file_id = file_mapping[old_file_id]
+                            
+                            # Create series
+                            series = ModernSeriesConfig(
+                                series_info['name'],
+                                new_file_id,
+                                series_info['x_column'],
+                                series_info['y_column'],
+                                series_info['start_index'],
+                                series_info['end_index']
+                            )
+                            
+                            # Apply saved properties
+                            for prop in ['color', 'line_style', 'marker', 'line_width', 
+                                        'marker_size', 'alpha', 'fill_area', 'visible', 
+                                        'legend_label', 'missing_data_method', 'show_trendline',
+                                        'trend_type', 'trend_params']:
+                                if prop in series_info:
+                                    setattr(series, prop, series_info[prop])
+                            
+                            self.all_series[series.id] = series
+                            self.loaded_files[new_file_id].series_list.append(series.id)
+                            
+                    except Exception as e:
+                        print(f"Error loading series: {e}")
+                
+                # Load plot configuration
+                if 'plot_config' in project_data:
+                    config = project_data['plot_config']
+                    self.title_var.set(config.get('title', 'Multi-File Data Analysis'))
+                    self.title_size_var.set(config.get('title_size', 16))
+                    self.xlabel_var.set(config.get('xlabel', 'X Axis'))
+                    self.xlabel_size_var.set(config.get('xlabel_size', 12))
+                    self.ylabel_var.set(config.get('ylabel', 'Y Axis'))
+                    self.ylabel_size_var.set(config.get('ylabel_size', 12))
+                    self.log_scale_x_var.set(config.get('log_scale_x', False))
+                    self.log_scale_y_var.set(config.get('log_scale_y', False))
+                    self.show_grid_var.set(config.get('show_grid', True))
+                    self.show_legend_var.set(config.get('show_legend', True))
+                    self.grid_style_var.set(config.get('grid_style', '-'))
+                    self.grid_alpha_var.set(config.get('grid_alpha', 0.3))
+                    self.fig_width_var.set(config.get('fig_width', 14.0))
+                    self.fig_height_var.set(config.get('fig_height', 9.0))
+                    self.plot_type_var.set(config.get('plot_type', 'line'))
+                
+                # Update displays
+                self.update_files_display()
+                self.update_series_display()
+                self.update_series_file_combo()
+                self.update_counts()
+                
+                self.status_bar.set_status(f"Project loaded from: {filename}", "success")
+                
+            except Exception as e:
+                self.status_bar.set_status(f"Load failed: {str(e)}", "error")
+
+    def show_vacuum_analysis(self):
+        """Show vacuum-specific analysis tools"""
+        if self.all_series:
+            # Create vacuum analysis dialog
+            vacuum_dialog = VacuumAnalysisDialog(self, None, self.all_series, self.loaded_files)
+            self.status_bar.set_status("Vacuum analysis tools opened", "info")
+        else:
+            self.status_bar.set_status("No series available for analysis", "warning")
 
     # ====================== Combined Methods ======================
     def add_files(self):
@@ -4394,6 +4780,9 @@ class ProfessionalMultiFileExcelPlotter(ctk.CTk):
                     
                     if numeric_cols:
                         self.series_y_combo.set(numeric_cols[0])
+                
+                # Update range limits
+                self.update_series_range_limits()
         
         except Exception as e:
             print(f"File selection error: {e}")
@@ -4644,6 +5033,16 @@ class ProfessionalMultiFileExcelPlotter(ctk.CTk):
         if len(x_plot) == 0:
             return
         
+        # Apply smoothing if requested
+        if series.smooth_factor > 0 and len(y_plot) > 5:
+            window_size = max(5, int(len(y_plot) * series.smooth_factor / 100))
+            if window_size % 2 == 0:
+                window_size += 1
+            try:
+                y_plot = savgol_filter(y_plot, window_size, 3)
+            except:
+                pass
+        
         # Plot based on type
         if plot_type == 'line':
             line = ax.plot(x_plot, y_plot, 
@@ -4683,19 +5082,36 @@ class ProfessionalMultiFileExcelPlotter(ctk.CTk):
         if series.show_trendline and plot_type in ['scatter', 'line']:
             self.add_trendline(ax, x_plot, y_plot, series)
         
+        # Add peaks if requested
+        if series.show_peaks:
+            self.mark_peaks(ax, x_plot, y_plot, series)
+        
+        # Add statistics box if requested
+        if series.show_statistics:
+            self.add_statistics_box(ax, y_plot, series)
+        
+        # Vacuum-specific features
+        if series.highlight_base_pressure:
+            base_pressure, _, _ = VacuumAnalysisTools.calculate_base_pressure(y_plot)
+            ax.axhline(y=base_pressure, color='green', linestyle='--', alpha=0.5, 
+                      label=f'Base: {base_pressure:.2e}')
+        
+        if series.highlight_spikes:
+            spikes = VacuumAnalysisTools.detect_pressure_spikes(y_plot)
+            for spike in spikes:
+                if spike['severity'] == 'high':
+                    ax.axvspan(x_plot.iloc[spike['start']], x_plot.iloc[spike['end']], 
+                              color='red', alpha=0.2)
+        
         # Handle datetime formatting for x-axis
         if pd.api.types.is_datetime64_any_dtype(x_data):
             ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d %H:%M'))
             ax.xaxis.set_major_locator(mdates.AutoDateLocator())
             self.figure.autofmt_xdate()
 
-        # Apply quality layers
-        self.layer_manager.apply_layers(ax, x_plot, y_plot, series.name)
-
     def handle_missing_data(self, y_data, method):
         """Handle missing data according to specified method"""
         if method == 'drop':
-            # dropna() already returns a Series
             return y_data.dropna()
         elif method == 'fill_zero':
             return y_data.fillna(0)
@@ -4722,27 +5138,104 @@ class ProfessionalMultiFileExcelPlotter(ctk.CTk):
             if valid.sum() < 2:
                 return
             
-            x_valid = x_numeric[valid].values.reshape(-1, 1)
+            x_valid = x_numeric[valid].values
             y_valid = y_numeric[valid].values
             
-            # Perform linear regression
-            reg = LinearRegression()
-            reg.fit(x_valid, y_valid)
-            
-            # Create trendline
-            x_trend = np.array([x_valid.min(), x_valid.max()]).reshape(-1, 1)
-            y_trend = reg.predict(x_trend)
-            
-            # Plot trendline
-            ax.plot(x_trend.flatten(), y_trend, 
-                   color=series.color, 
-                   linestyle='--', 
-                   linewidth=series.line_width * 0.8,
-                   alpha=series.alpha * 0.7,
-                   label=f"{series.name} trend (R²={reg.score(x_valid, y_valid):.3f})")
+            if series.trend_type == 'linear':
+                # Linear regression
+                x_valid_2d = x_valid.reshape(-1, 1)
+                reg = LinearRegression()
+                reg.fit(x_valid_2d, y_valid)
+                
+                # Create trendline
+                x_trend = np.array([x_valid.min(), x_valid.max()]).reshape(-1, 1)
+                y_trend = reg.predict(x_trend)
+                
+                # Plot trendline
+                ax.plot(x_trend.flatten(), y_trend, 
+                       color=series.color, 
+                       linestyle='--', 
+                       linewidth=series.line_width * 0.8,
+                       alpha=series.alpha * 0.7,
+                       label=f"{series.name} trend (R²={reg.score(x_valid_2d, y_valid):.3f})")
+                       
+            elif series.trend_type == 'polynomial':
+                degree = series.trend_params.get('degree', 2)
+                coeffs = np.polyfit(x_valid, y_valid, degree)
+                poly = np.poly1d(coeffs)
+                
+                x_trend = np.linspace(x_valid.min(), x_valid.max(), 100)
+                y_trend = poly(x_trend)
+                
+                ax.plot(x_trend, y_trend,
+                       color=series.color,
+                       linestyle='--',
+                       linewidth=series.line_width * 0.8,
+                       alpha=series.alpha * 0.7,
+                       label=f"{series.name} poly{degree}")
+                       
+            elif series.trend_type == 'moving_average':
+                window = series.trend_params.get('window', 20)
+                ma = pd.Series(y_valid).rolling(window=window, center=True).mean()
+                
+                ax.plot(x_valid, ma,
+                       color=series.color,
+                       linestyle='--',
+                       linewidth=series.line_width * 0.8,
+                       alpha=series.alpha * 0.7,
+                       label=f"{series.name} MA({window})")
             
         except Exception as e:
             print(f"Failed to add trendline: {e}")
+
+    def mark_peaks(self, ax, x_data, y_data, series):
+        """Mark peaks and valleys on the plot"""
+        try:
+            # Calculate prominence based on data range
+            data_range = np.max(y_data) - np.min(y_data)
+            prominence = series.peak_prominence * data_range
+            
+            # Find peaks and valleys
+            peak_results = DataAnalysisTools.find_peaks_and_valleys(
+                np.array(x_data), np.array(y_data), prominence
+            )
+            
+            # Mark peaks
+            if len(peak_results['peaks']['indices']) > 0:
+                ax.scatter(peak_results['peaks']['x_values'], 
+                          peak_results['peaks']['y_values'],
+                          marker='^', s=100, color='red', zorder=5,
+                          label=f'{series.name} peaks')
+            
+            # Mark valleys
+            if len(peak_results['valleys']['indices']) > 0:
+                ax.scatter(peak_results['valleys']['x_values'], 
+                          peak_results['valleys']['y_values'],
+                          marker='v', s=100, color='blue', zorder=5,
+                          label=f'{series.name} valleys')
+                          
+        except Exception as e:
+            print(f"Failed to mark peaks: {e}")
+
+    def add_statistics_box(self, ax, y_data, series):
+        """Add statistics box to plot"""
+        try:
+            stats = DataAnalysisTools.calculate_statistics(y_data)
+            
+            # Create text for statistics box
+            stats_text = f"{series.name}\n"
+            stats_text += f"Mean: {stats['mean']:.3e}\n"
+            stats_text += f"Std: {stats['std']:.3e}\n"
+            stats_text += f"Min: {stats['min']:.3e}\n"
+            stats_text += f"Max: {stats['max']:.3e}"
+            
+            # Add text box to plot
+            props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
+            ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=9,
+                   verticalalignment='top', bbox=props)
+                   
+        except Exception as e:
+            print(f"Failed to add statistics: {e}")
 
     def configure_plot_axes(self, ax):
         """Configure plot axes and styling"""
@@ -4793,9 +5286,10 @@ class ProfessionalMultiFileExcelPlotter(ctk.CTk):
     def show_analysis_panel(self):
         """Show the analysis tools panel"""
         if self.all_series:
-            # Create analysis dialog with current data
-            analysis_dialog = AnalysisDialog(self, None, self.all_series, self.loaded_files)
-            self.status_bar.set_status("Analysis tools panel opened", "info")
+            # Simple implementation without external AnalysisDialog
+            self.status_bar.set_status("Analysis tools not available in this version", "info")
+            # You could implement a basic analysis dialog here or use vacuum analysis
+            self.show_vacuum_analysis()
         else:
             self.status_bar.set_status("No series available for analysis", "warning")
 
@@ -4866,23 +5360,34 @@ class ProfessionalMultiFileExcelPlotter(ctk.CTk):
             return
             
         # Create save dialog
+        format_map = {
+            'PNG (High Quality)': '.png',
+            'PDF (Vector)': '.pdf',
+            'SVG (Scalable)': '.svg',
+            'JPG (Compressed)': '.jpg'
+        }
+        
+        selected_format = self.export_format.get() if hasattr(self, 'export_format') else 'PNG (High Quality)'
+        default_ext = format_map.get(selected_format, '.png')
+        
         filetypes = [
             ("PNG files", "*.png"),
             ("PDF files", "*.pdf"),
             ("SVG files", "*.svg"),
+            ("JPG files", "*.jpg"),
             ("All files", "*.*")
         ]
         
         filename = filedialog.asksaveasfilename(
             parent=parent or self,
             title="Export Plot",
-            defaultextension=".png",
+            defaultextension=default_ext,
             filetypes=filetypes
         )
         
         if filename:
             try:
-                dpi = 300 if "png" in filename.lower() else 150
+                dpi = self.dpi_var.get() if hasattr(self, 'dpi_var') else 300
                 self.figure.savefig(filename, dpi=dpi, bbox_inches='tight')
                 self.status_bar.set_status(f"Plot exported to: {filename}", "success")
                 if parent:
@@ -4975,7 +5480,10 @@ class ProfessionalMultiFileExcelPlotter(ctk.CTk):
                         'fill_area': series.fill_area,
                         'visible': series.visible,
                         'legend_label': series.legend_label,
-                        'missing_data_method': series.missing_data_method
+                        'missing_data_method': series.missing_data_method,
+                        'show_trendline': series.show_trendline,
+                        'trend_type': series.trend_type,
+                        'trend_params': series.trend_params
                     }
                     config['series'].append(series_dict)
                 
@@ -5099,13 +5607,18 @@ class ProfessionalMultiFileExcelPlotter(ctk.CTk):
         self.status_bar.set_status(f"Layout changed to: {self.current_layout}", "info")
 
     def toggle_theme(self):
-        """Toggle between dark and light themes"""
-        current = ctk.get_appearance_mode()
+        """Toggle between dark and light themes - FIXED"""
+        current = ctk.get_appearance_mode().lower()
         new_mode = "light" if current == "dark" else "dark"
         ctk.set_appearance_mode(new_mode)
         self.current_theme = new_mode
+        
+        # Update plot style if plot exists
+        if hasattr(self, 'figure') and self.figure:
+            # Refresh plot with new theme
+            self.refresh_plot()
+        
         self.status_bar.set_status(f"Theme changed to: {new_mode}", "info")
-        self.refresh_plot()
 
     def on_closing(self):
         """Handle window closing event"""
@@ -5153,12 +5666,15 @@ class ProfessionalMultiFileExcelPlotter(ctk.CTk):
         else:
             self.destroy()
 
+
+
+
 # Main execution
 if __name__ == "__main__":
     try:
         print("\n" + "="*60)
-        print("PROFESSIONAL MULTI-FILE EXCEL DATA PLOTTER v4.0")
-        print("Enhanced Edition with Analysis Tools")
+        print("PROFESSIONAL MULTI-FILE EXCEL DATA PLOTTER v4.1")
+        print("Vacuum Analysis Edition")
         print("="*60 + "\n")
         
         app = ProfessionalMultiFileExcelPlotter()

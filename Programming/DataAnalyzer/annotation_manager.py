@@ -1,419 +1,518 @@
 #!/usr/bin/env python3
 """
-annotation_manager.py - Annotation management system for plots
-Handles adding, editing, and removing annotations on plots
+annotation_manager.py - Enhanced annotation management system for plots
+Handles data-aware annotations with improved positioning and interaction
 """
 
-import uuid  # For generating unique IDs
-import json  # For import/export functionality
-from matplotlib.patches import Rectangle, Polygon, FancyArrowPatch  # For drawing shapes
-from matplotlib.lines import Line2D  # For line annotations
+import uuid
+import json
+import numpy as np
+import pandas as pd
+from matplotlib.patches import Rectangle, Polygon, FancyArrowPatch, FancyBboxPatch
+from matplotlib.lines import Line2D
+from matplotlib.text import Annotation
+import matplotlib.pyplot as plt
 
 
 class AnnotationManager:
     """
-    Manages all annotations for a plot
-    Provides methods to add, update, remove, and draw annotations
+    Enhanced annotation manager with data-aware positioning
     """
 
     def __init__(self):
-        """Initialize empty annotation manager"""
-        # Dictionary to store all annotations by ID
+        """Initialize annotation manager with enhanced features"""
         self.annotations = {}
-
-        # Counter for generating unique IDs
         self.annotation_id_counter = 0
-
-        # Currently selected annotation for editing
         self.selected_annotation = None
 
-    def add_annotation(self, ann_type, **kwargs):
+        # Store axis limits for data-aware positioning
+        self.x_limits = None
+        self.y_limits = None
+        self.x_data_range = None
+        self.y_data_range = None
+
+        # Store reference to current axes
+        self.current_ax = None
+
+    def set_data_context(self, ax):
         """
-        Add a new annotation to the manager
-
-        Args:
-            ann_type (str): Type of annotation ('vline', 'hline', 'region', 'text', 'point', 'arrow')
-            **kwargs: Additional parameters specific to annotation type
-
-        Returns:
-            str: ID of the created annotation
-        """
-        # Generate unique ID
-        self.annotation_id_counter += 1
-        ann_id = f"ann_{self.annotation_id_counter}"
-
-        # Create annotation dictionary with defaults
-        annotation = {
-            'id': ann_id,  # Unique identifier
-            'type': ann_type,  # Annotation type
-            'visible': True,  # Whether to display
-            'editable': True,  # Whether user can edit
-            **kwargs  # Add all provided parameters
-        }
-
-        # Store annotation
-        self.annotations[ann_id] = annotation
-
-        return ann_id
-
-    def update_annotation(self, ann_id, **kwargs):
-        """
-        Update properties of an existing annotation
-
-        Args:
-            ann_id (str): ID of annotation to update
-            **kwargs: Properties to update
-        """
-        # Check if annotation exists
-        if ann_id in self.annotations:
-            # Update specified properties
-            self.annotations[ann_id].update(kwargs)
-
-    def remove_annotation(self, ann_id):
-        """
-        Remove an annotation by ID
-
-        Args:
-            ann_id (str): ID of annotation to remove
-        """
-        # Check if annotation exists
-        if ann_id in self.annotations:
-            # Delete annotation
-            del self.annotations[ann_id]
-
-            # Clear selection if this was selected
-            if self.selected_annotation == ann_id:
-                self.selected_annotation = None
-
-    def clear_all(self):
-        """Remove all annotations"""
-        self.annotations.clear()  # Clear dictionary
-        self.selected_annotation = None  # Clear selection
-        self.annotation_id_counter = 0  # Reset counter
-
-    def select_annotation(self, ann_id):
-        """
-        Select an annotation for editing
-
-        Args:
-            ann_id (str): ID of annotation to select
-        """
-        # Set as selected if it exists
-        if ann_id in self.annotations:
-            self.selected_annotation = ann_id
-
-    def deselect_annotation(self):
-        """Deselect current annotation"""
-        self.selected_annotation = None
-
-    def get_annotation(self, ann_id):
-        """
-        Get annotation data by ID
-
-        Args:
-            ann_id (str): Annotation ID
-
-        Returns:
-            dict: Annotation data or None if not found
-        """
-        return self.annotations.get(ann_id)
-
-    def get_visible_annotations(self):
-        """
-        Get list of visible annotations
-
-        Returns:
-            list: List of visible annotation dictionaries
-        """
-        # Filter for visible annotations
-        return [ann for ann in self.annotations.values() if ann.get('visible', True)]
-
-    def draw_annotations(self, ax, picker=True):
-        """
-        Draw all visible annotations on the given axes
+        Set the data context from current axes
 
         Args:
             ax: Matplotlib axes object
-            picker (bool): Whether to enable picking (for interaction)
+        """
+        self.current_ax = ax
+        if ax:
+            self.x_limits = ax.get_xlim()
+            self.y_limits = ax.get_ylim()
+            self.x_data_range = self.x_limits[1] - self.x_limits[0]
+            self.y_data_range = self.y_limits[1] - self.y_limits[0]
+
+    def convert_relative_to_data(self, rel_x, rel_y):
+        """
+        Convert relative coordinates (0-1) to data coordinates
+
+        Args:
+            rel_x: Relative X position (0-1)
+            rel_y: Relative Y position (0-1)
 
         Returns:
-            dict: Dictionary mapping artists to annotation IDs
+            tuple: (data_x, data_y)
         """
-        # Dictionary to map drawn artists to annotation IDs
-        artists = {}
+        if self.x_limits and self.y_limits:
+            data_x = self.x_limits[0] + rel_x * self.x_data_range
+            data_y = self.y_limits[0] + rel_y * self.y_data_range
+            return data_x, data_y
+        return rel_x, rel_y
 
-        # Draw each visible annotation
+    def convert_data_to_relative(self, data_x, data_y):
+        """
+        Convert data coordinates to relative coordinates (0-1)
+
+        Args:
+            data_x: Data X position
+            data_y: Data Y position
+
+        Returns:
+            tuple: (rel_x, rel_y)
+        """
+        if self.x_limits and self.y_limits and self.x_data_range and self.y_data_range:
+            rel_x = (data_x - self.x_limits[0]) / self.x_data_range
+            rel_y = (data_y - self.y_limits[0]) / self.y_data_range
+            return rel_x, rel_y
+        return data_x, data_y
+
+    def add_data_annotation(self, ann_type, **kwargs):
+        """
+        Add annotation with data-aware positioning
+
+        Args:
+            ann_type: Type of annotation
+            **kwargs: Annotation parameters including data coordinates
+
+        Returns:
+            str: Annotation ID
+        """
+        self.annotation_id_counter += 1
+        ann_id = f"ann_{self.annotation_id_counter}"
+
+        # Create annotation with data coordinates
+        annotation = {
+            'id': ann_id,
+            'type': ann_type,
+            'visible': kwargs.get('visible', True),
+            'editable': kwargs.get('editable', True),
+            'use_data_coords': kwargs.get('use_data_coords', True),
+            **kwargs
+        }
+
+        self.annotations[ann_id] = annotation
+        return ann_id
+
+    def add_spike_annotation(self, x_start, x_end, y_max, label="Spike", color='red'):
+        """
+        Add spike annotation with shaded region and marker
+
+        Args:
+            x_start: Start X position in data coordinates
+            x_end: End X position in data coordinates
+            y_max: Maximum Y value of spike
+            label: Annotation label
+            color: Highlight color
+
+        Returns:
+            str: Annotation ID
+        """
+        return self.add_data_annotation(
+            'spike_region',
+            x_start=x_start,
+            x_end=x_end,
+            y_max=y_max,
+            label=label,
+            color=color,
+            alpha=0.3,
+            marker_color='red',
+            marker_size=100
+        )
+
+    def add_leak_annotation(self, x_start, x_end, slope, label="Leak", color='orange'):
+        """
+        Add leak rate annotation with trend line
+
+        Args:
+            x_start: Start X position
+            x_end: End X position
+            slope: Leak rate slope
+            label: Annotation label
+            color: Highlight color
+
+        Returns:
+            str: Annotation ID
+        """
+        return self.add_data_annotation(
+            'leak_region',
+            x_start=x_start,
+            x_end=x_end,
+            slope=slope,
+            label=label,
+            color=color,
+            alpha=0.2,
+            show_trend=True
+        )
+
+    def add_pumpdown_annotation(self, x_start, x_end, p_initial, p_final, time_to_base, label="Pump-down"):
+        """
+        Add pump-down annotation with info box
+
+        Args:
+            x_start: Start X position
+            x_end: End X position
+            p_initial: Initial pressure
+            p_final: Final pressure
+            time_to_base: Time to reach base pressure
+            label: Annotation label
+
+        Returns:
+            str: Annotation ID
+        """
+        return self.add_data_annotation(
+            'pumpdown_region',
+            x_start=x_start,
+            x_end=x_end,
+            p_initial=p_initial,
+            p_final=p_final,
+            time_to_base=time_to_base,
+            label=label,
+            color='green',
+            alpha=0.2,
+            show_info_box=True
+        )
+
+    def add_data_point_annotation(self, x_data, y_data, label, **kwargs):
+        """
+        Add annotation at specific data point
+
+        Args:
+            x_data: X data coordinate
+            y_data: Y data coordinate
+            label: Annotation text
+            **kwargs: Additional styling parameters
+
+        Returns:
+            str: Annotation ID
+        """
+        return self.add_data_annotation(
+            'data_point',
+            x_pos=x_data,
+            y_pos=y_data,
+            label=label,
+            text=label,
+            marker=kwargs.get('marker', 'o'),
+            color=kwargs.get('color', 'red'),
+            size=kwargs.get('size', 100),
+            show_arrow=kwargs.get('show_arrow', True),
+            arrow_props=kwargs.get('arrow_props', dict(arrowstyle='->', lw=2))
+        )
+
+    def add_data_arrow(self, x1_data, y1_data, x2_data, y2_data, label="", **kwargs):
+        """
+        Add arrow between two data points
+
+        Args:
+            x1_data, y1_data: Start point in data coordinates
+            x2_data, y2_data: End point in data coordinates
+            label: Optional label
+            **kwargs: Arrow styling
+
+        Returns:
+            str: Annotation ID
+        """
+        return self.add_data_annotation(
+            'data_arrow',
+            x_start=x1_data,
+            y_start=y1_data,
+            x_end=x2_data,
+            y_end=y2_data,
+            label=label,
+            color=kwargs.get('color', 'black'),
+            style=kwargs.get('style', '->'),
+            width=kwargs.get('width', 2),
+            connection_style=kwargs.get('connection_style', 'arc3,rad=0.1')
+        )
+
+    def draw_annotations(self, ax, picker=True):
+        """
+        Draw all visible annotations on axes with enhanced rendering
+
+        Args:
+            ax: Matplotlib axes
+            picker: Enable picking for interaction
+
+        Returns:
+            dict: Artist to annotation ID mapping
+        """
+        artists = {}
+        self.set_data_context(ax)
+
         for ann_id, ann in self.annotations.items():
-            # Skip invisible annotations
             if not ann.get('visible', True):
                 continue
 
-            # Variable to store created artist
             artist = None
+            ann_type = ann['type']
 
-            # Draw based on annotation type
-            if ann['type'] == 'vline':
-                # Vertical line annotation
+            # Handle different annotation types
+            if ann_type == 'spike_region':
+                # Draw spike region with marker
+                artist = self._draw_spike_region(ax, ann, picker)
+
+            elif ann_type == 'leak_region':
+                # Draw leak region with trend
+                artist = self._draw_leak_region(ax, ann, picker)
+
+            elif ann_type == 'pumpdown_region':
+                # Draw pump-down region with info
+                artist = self._draw_pumpdown_region(ax, ann, picker)
+
+            elif ann_type == 'data_point':
+                # Draw point with label
+                artist = self._draw_data_point(ax, ann, picker)
+
+            elif ann_type == 'data_arrow':
+                # Draw arrow between data points
+                artist = self._draw_data_arrow(ax, ann, picker)
+
+            elif ann_type == 'vline':
+                # Vertical line at data X position
                 artist = ax.axvline(
-                    x=ann['x_pos'],  # X position
-                    color=ann.get('color', 'red'),  # Line color
-                    linestyle=ann.get('style', '--'),  # Line style
-                    linewidth=ann.get('width', 2),  # Line width
-                    alpha=ann.get('alpha', 0.8),  # Transparency
-                    label=ann.get('label'),  # Legend label
-                    picker=picker  # Enable picking
+                    x=ann['x_pos'],
+                    color=ann.get('color', 'red'),
+                    linestyle=ann.get('style', '--'),
+                    linewidth=ann.get('width', 2),
+                    alpha=ann.get('alpha', 0.8),
+                    label=ann.get('label'),
+                    picker=picker
                 )
 
-            elif ann['type'] == 'hline':
-                # Horizontal line annotation
+            elif ann_type == 'hline':
+                # Horizontal line at data Y position
                 artist = ax.axhline(
-                    y=ann['y_pos'],  # Y position
-                    color=ann.get('color', 'blue'),  # Line color
-                    linestyle=ann.get('style', '--'),  # Line style
-                    linewidth=ann.get('width', 2),  # Line width
-                    alpha=ann.get('alpha', 0.8),  # Transparency
-                    label=ann.get('label'),  # Legend label
-                    picker=picker  # Enable picking
+                    y=ann['y_pos'],
+                    color=ann.get('color', 'blue'),
+                    linestyle=ann.get('style', '--'),
+                    linewidth=ann.get('width', 2),
+                    alpha=ann.get('alpha', 0.8),
+                    label=ann.get('label'),
+                    picker=picker
                 )
 
-            elif ann['type'] == 'region':
-                # Shaded region annotation
+            elif ann_type == 'region':
+                # Shaded region
                 artist = ax.axvspan(
-                    ann['x_start'],  # Start X position
-                    ann['x_end'],  # End X position
-                    color=ann.get('color', 'yellow'),  # Fill color
-                    alpha=ann.get('alpha', 0.3),  # Transparency
-                    label=ann.get('label'),  # Legend label
-                    picker=picker  # Enable picking
+                    ann['x_start'],
+                    ann['x_end'],
+                    color=ann.get('color', 'yellow'),
+                    alpha=ann.get('alpha', 0.3),
+                    label=ann.get('label'),
+                    picker=picker
                 )
 
-            elif ann['type'] == 'point':
-                # Point marker annotation
-                artist = ax.scatter(
-                    ann['x_pos'],  # X position
-                    ann['y_pos'],  # Y position
-                    marker=ann.get('marker', 'o'),  # Marker style
-                    s=ann.get('size', 100),  # Marker size
-                    color=ann.get('color', 'red'),  # Marker color
-                    edgecolors='black' if ann_id == self.selected_annotation else 'none',  # Highlight if selected
-                    linewidths=2 if ann_id == self.selected_annotation else 0,  # Edge width
-                    zorder=10,  # Draw order (on top)
-                    label=ann.get('label'),  # Legend label
-                    picker=picker  # Enable picking
-                )
-
-            elif ann['type'] == 'text':
-                # Text annotation
-                # Get text box properties if specified
-                bbox_props = ann.get('bbox')
-
-                # Highlight selected annotation
-                if ann_id == self.selected_annotation and bbox_props:
-                    bbox_props = dict(bbox_props)  # Copy to avoid modifying original
-                    bbox_props['edgecolor'] = 'blue'  # Highlight border
-                    bbox_props['linewidth'] = 2  # Thicker border
-
-                # Create text annotation
-                artist = ax.text(
-                    ann['x_pos'],  # X position
-                    ann['y_pos'],  # Y position
-                    ann['text'],  # Text content
-                    fontsize=ann.get('fontsize', 12),  # Font size
-                    color=ann.get('color', 'black'),  # Text color
-                    bbox=bbox_props,  # Background box
-                    zorder=10,  # Draw order
-                    picker=picker  # Enable picking
-                )
-
-            elif ann['type'] == 'arrow':
-                # Arrow annotation with fancy arrow patch
-                arrow = FancyArrowPatch(
-                    (ann['x_start'], ann['y_start']),  # Start point
-                    (ann['x_end'], ann['y_end']),  # End point
-                    arrowstyle=ann.get('style', '->'),  # Arrow style
-                    color=ann.get('color', 'black'),  # Arrow color
-                    linewidth=ann.get('width', 2),  # Line width
-                    mutation_scale=20,  # Arrow head size
-                    alpha=ann.get('alpha', 0.8)  # Transparency
-                )
-                ax.add_patch(arrow)  # Add to axes
-                artist = arrow
-
-            # Store artist-annotation mapping
             if artist:
                 artists[artist] = ann_id
 
         return artists
 
-    def export_annotations(self, filename):
-        """
-        Export annotations to JSON file
-
-        Args:
-            filename (str): Path to save file
-        """
-        # Prepare data for export
-        export_data = {
-            'version': '1.0',  # Format version
-            'annotations': self.annotations,  # All annotations
-            'selected': self.selected_annotation,  # Current selection
-            'counter': self.annotation_id_counter  # ID counter state
-        }
-
-        # Write to JSON file
-        with open(filename, 'w') as f:
-            json.dump(export_data, f, indent=2)
-
-    def import_annotations(self, filename, merge=False):
-        """
-        Import annotations from JSON file
-
-        Args:
-            filename (str): Path to load file
-            merge (bool): Whether to merge with existing annotations
-        """
-        # Load from JSON file
-        with open(filename, 'r') as f:
-            import_data = json.load(f)
-
-        # Clear existing if not merging
-        if not merge:
-            self.clear_all()
-
-        # Import annotations
-        for ann_id, annotation in import_data.get('annotations', {}).items():
-            if merge:
-                # Generate new ID for merged annotations
-                new_id = self.add_annotation(
-                    annotation['type'],
-                    **{k: v for k, v in annotation.items() if k not in ['id', 'type']}
-                )
-            else:
-                # Use original ID
-                self.annotations[ann_id] = annotation
-
-        # Restore counter state if not merging
-        if not merge:
-            self.annotation_id_counter = import_data.get('counter', 0)
-            self.selected_annotation = import_data.get('selected')
-
-    def create_vacuum_templates(self):
-        """
-        Create common vacuum analysis annotation templates
-
-        Returns:
-            list: List of created annotation IDs
-        """
-        created_ids = []
-
-        # Base pressure line template
-        ann_id = self.add_annotation(
-            'hline',
-            y_pos=1e-6,  # Typical base pressure
-            label="Base Pressure",
-            color='green',
-            style='--',
-            width=2,
-            alpha=0.8
+    def _draw_spike_region(self, ax, ann, picker):
+        """Draw spike region with enhanced visualization"""
+        # Draw shaded region
+        region = ax.axvspan(
+            ann['x_start'],
+            ann['x_end'],
+            color=ann.get('color', 'red'),
+            alpha=ann.get('alpha', 0.3),
+            label=ann.get('label')
         )
-        created_ids.append(ann_id)
 
-        # Pressure target lines
-        targets = [
-            (1e-3, "High Vacuum", 'blue'),
-            (1e-6, "Ultra-High Vacuum", 'green'),
-            (1e-9, "Extreme High Vacuum", 'purple')
-        ]
-
-        for pressure, label, color in targets:
-            ann_id = self.add_annotation(
-                'hline',
-                y_pos=pressure,
-                label=f"{label}: {pressure:.0e} mbar",
-                color=color,
-                style=':',
-                width=1.5,
-                alpha=0.6
+        # Add peak marker if y_max provided
+        if 'y_max' in ann:
+            x_center = (ann['x_start'] + ann['x_end']) / 2
+            ax.scatter(
+                x_center,
+                ann['y_max'],
+                marker='^',
+                s=ann.get('marker_size', 100),
+                color=ann.get('marker_color', 'red'),
+                zorder=10,
+                edgecolors='black',
+                linewidths=2
             )
-            created_ids.append(ann_id)
 
-        return created_ids
+            # Add label at peak
+            if ann.get('label'):
+                ax.annotate(
+                    ann['label'],
+                    xy=(x_center, ann['y_max']),
+                    xytext=(10, 10),
+                    textcoords='offset points',
+                    fontsize=9,
+                    bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8),
+                    arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0.2')
+                )
 
-    def find_annotations_at_point(self, x, y, tolerance=0.05):
+        return region
+
+    def _draw_leak_region(self, ax, ann, picker):
+        """Draw leak region with trend line"""
+        # Draw shaded region
+        region = ax.axvspan(
+            ann['x_start'],
+            ann['x_end'],
+            color=ann.get('color', 'orange'),
+            alpha=ann.get('alpha', 0.2),
+            label=ann.get('label')
+        )
+
+        # Add trend line if requested
+        if ann.get('show_trend') and 'slope' in ann:
+            x_points = np.array([ann['x_start'], ann['x_end']])
+            # Need to get actual y values from data or estimate
+            if self.y_limits:
+                y_center = (self.y_limits[0] + self.y_limits[1]) / 2
+                y_points = y_center + ann['slope'] * (x_points - x_points[0])
+                ax.plot(x_points, y_points, 'r--', linewidth=2, alpha=0.7)
+
+        # Add label
+        if ann.get('label'):
+            x_center = (ann['x_start'] + ann['x_end']) / 2
+            if self.y_limits:
+                y_pos = self.y_limits[1] - 0.1 * self.y_data_range
+                ax.text(
+                    x_center,
+                    y_pos,
+                    ann['label'],
+                    fontsize=10,
+                    ha='center',
+                    bbox=dict(boxstyle='round,pad=0.3', facecolor='orange', alpha=0.5)
+                )
+
+        return region
+
+    def _draw_pumpdown_region(self, ax, ann, picker):
+        """Draw pump-down region with info box"""
+        # Draw shaded region
+        region = ax.axvspan(
+            ann['x_start'],
+            ann['x_end'],
+            color=ann.get('color', 'green'),
+            alpha=ann.get('alpha', 0.2),
+            label=ann.get('label')
+        )
+
+        # Add info box if requested
+        if ann.get('show_info_box'):
+            info_text = f"{ann.get('label', 'Pump-down')}\n"
+            if 'p_initial' in ann:
+                info_text += f"P₀: {ann['p_initial']:.2e} mbar\n"
+            if 'p_final' in ann:
+                info_text += f"P_f: {ann['p_final']:.2e} mbar\n"
+            if 'time_to_base' in ann:
+                info_text += f"Time: {ann['time_to_base']:.1f} min"
+
+            x_center = (ann['x_start'] + ann['x_end']) / 2
+            if self.y_limits:
+                y_pos = self.y_limits[0] + 0.8 * self.y_data_range
+                ax.text(
+                    x_center,
+                    y_pos,
+                    info_text,
+                    fontsize=9,
+                    ha='center',
+                    va='top',
+                    bbox=dict(boxstyle='round,pad=0.5', facecolor='lightgreen', alpha=0.8)
+                )
+
+        return region
+
+    def _draw_data_point(self, ax, ann, picker):
+        """Draw annotated data point"""
+        # Draw marker
+        scatter = ax.scatter(
+            ann['x_pos'],
+            ann['y_pos'],
+            marker=ann.get('marker', 'o'),
+            s=ann.get('size', 100),
+            color=ann.get('color', 'red'),
+            zorder=10,
+            picker=picker,
+            edgecolors='black' if ann['id'] == self.selected_annotation else 'none',
+            linewidths=2 if ann['id'] == self.selected_annotation else 0
+        )
+
+        # Add label with arrow
+        if ann.get('text') and ann.get('show_arrow', True):
+            ax.annotate(
+                ann['text'],
+                xy=(ann['x_pos'], ann['y_pos']),
+                xytext=(20, 20),
+                textcoords='offset points',
+                fontsize=ann.get('fontsize', 10),
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8),
+                arrowprops=ann.get('arrow_props', dict(arrowstyle='->', lw=1.5))
+            )
+
+        return scatter
+
+    def _draw_data_arrow(self, ax, ann, picker):
+        """Draw arrow between data points"""
+        arrow = FancyArrowPatch(
+            (ann['x_start'], ann['y_start']),
+            (ann['x_end'], ann['y_end']),
+            arrowstyle=ann.get('style', '->'),
+            color=ann.get('color', 'black'),
+            linewidth=ann.get('width', 2),
+            connectionstyle=ann.get('connection_style', 'arc3,rad=0.1'),
+            mutation_scale=20,
+            alpha=ann.get('alpha', 0.8)
+        )
+        ax.add_patch(arrow)
+
+        # Add label at midpoint if provided
+        if ann.get('label'):
+            x_mid = (ann['x_start'] + ann['x_end']) / 2
+            y_mid = (ann['y_start'] + ann['y_end']) / 2
+            ax.text(
+                x_mid,
+                y_mid,
+                ann['label'],
+                fontsize=10,
+                ha='center',
+                bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.7)
+            )
+
+        return arrow
+
+    def find_annotations_in_range(self, x_start, x_end):
         """
-        Find annotations near a given point (for interaction)
+        Find annotations within X data range
 
         Args:
-            x: X coordinate
-            y: Y coordinate
-            tolerance: Distance tolerance for selection
+            x_start: Start X position
+            x_end: End X position
 
         Returns:
-            list: List of annotation IDs near the point
+            list: Annotation IDs in range
         """
         found = []
 
         for ann_id, ann in self.annotations.items():
-            # Check based on annotation type
-            if ann['type'] == 'vline':
-                # Check X distance for vertical lines
-                if abs(ann['x_pos'] - x) < tolerance:
+            if ann['type'] in ['spike_region', 'leak_region', 'pumpdown_region', 'region']:
+                if ann['x_start'] <= x_end and ann['x_end'] >= x_start:
                     found.append(ann_id)
-
-            elif ann['type'] == 'hline':
-                # Check Y distance for horizontal lines
-                if abs(ann['y_pos'] - y) < tolerance:
+            elif ann['type'] == 'vline':
+                if x_start <= ann['x_pos'] <= x_end:
                     found.append(ann_id)
-
-            elif ann['type'] == 'region':
-                # Check if point is inside region
-                if ann['x_start'] <= x <= ann['x_end']:
-                    found.append(ann_id)
-
-            elif ann['type'] == 'point':
-                # Check distance to point
-                dist = ((ann['x_pos'] - x) ** 2 + (ann['y_pos'] - y) ** 2) ** 0.5
-                if dist < tolerance:
-                    found.append(ann_id)
-
-            elif ann['type'] == 'text':
-                # Check if near text position
-                dist = ((ann['x_pos'] - x) ** 2 + (ann['y_pos'] - y) ** 2) ** 0.5
-                if dist < tolerance:
+            elif ann['type'] in ['data_point', 'point']:
+                if 'x_pos' in ann and x_start <= ann['x_pos'] <= x_end:
                     found.append(ann_id)
 
         return found
-
-    def move_annotation(self, ann_id, dx=0, dy=0):
-        """
-        Move an annotation by a delta amount
-
-        Args:
-            ann_id (str): Annotation ID
-            dx: X-axis movement
-            dy: Y-axis movement
-        """
-        ann = self.annotations.get(ann_id)
-        if not ann:
-            return
-
-        # Move based on type
-        if ann['type'] == 'vline':
-            ann['x_pos'] += dx
-
-        elif ann['type'] == 'hline':
-            ann['y_pos'] += dy
-
-        elif ann['type'] == 'region':
-            ann['x_start'] += dx
-            ann['x_end'] += dx
-
-        elif ann['type'] in ['point', 'text']:
-            ann['x_pos'] += dx
-            ann['y_pos'] += dy
-
-        elif ann['type'] == 'arrow':
-            ann['x_start'] += dx
-            ann['y_start'] += dy
-            ann['x_end'] += dx
-            ann['y_end'] += dy

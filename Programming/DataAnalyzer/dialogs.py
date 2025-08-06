@@ -823,24 +823,20 @@ class VacuumAnalysisDialog:
     """
 
     def __init__(self, parent, series_data, all_series, loaded_files):
-        """
-        Initialize vacuum analysis dialog
-
-        Args:
-            parent: Parent window
-            series_data: Current series data
-            all_series: Dictionary of all series
-            loaded_files: Dictionary of loaded files
-        """
         self.parent = parent
         self.series_data = series_data
         self.all_series = all_series
         self.loaded_files = loaded_files
         self.result = None
 
+        # Store analysis results
+        self.spike_results = []
+        self.leak_results = []
+        self.pumpdown_results = []
+
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Vacuum Data Analysis Tools")
-        self.dialog.geometry("900x700")
+        self.dialog.geometry("1000x750")
         self.dialog.transient(parent)
         self.dialog.grab_set()
 
@@ -848,26 +844,14 @@ class VacuumAnalysisDialog:
         self.dialog.geometry("+%d+%d" % (parent.winfo_rootx() + 50, parent.winfo_rooty() + 50))
 
     def create_widgets(self):
-        # Create notebook for different analysis categories
         notebook = ttk.Notebook(self.dialog)
         notebook.pack(fill='both', expand=True, padx=10, pady=10)
 
-        # Base pressure analysis tab
         self.create_base_pressure_tab(notebook)
-
-        # Noise analysis tab
-        self.create_noise_analysis_tab(notebook)
-
-        # Spike detection tab
         self.create_spike_detection_tab(notebook)
-
-        # Leak rate analysis tab
-        self.create_leak_rate_tab(notebook)
-
-        # Pump-down analysis tab
+        self.create_leak_detection_tab(notebook)
         self.create_pumpdown_tab(notebook)
 
-        # Buttons
         btn_frame = ttk.Frame(self.dialog)
         btn_frame.pack(fill='x', padx=10, pady=10)
 
@@ -875,35 +859,56 @@ class VacuumAnalysisDialog:
         ttk.Button(btn_frame, text="Export Results", command=self.export_results).pack(side='right', padx=5)
 
     def create_base_pressure_tab(self, notebook):
-        """Create base pressure analysis tab"""
+        """Enhanced base pressure analysis with time range selection"""
         base_frame = ttk.Frame(notebook)
         notebook.add(base_frame, text='🎯 Base Pressure')
 
         # Series selection
-        select_frame = ttk.LabelFrame(base_frame, text="Select Series", padding=10)
+        select_frame = ttk.LabelFrame(base_frame, text="Data Selection", padding=10)
         select_frame.pack(fill='x', padx=5, pady=5)
 
+        ttk.Label(select_frame, text="Series:").grid(row=0, column=0, sticky='w', padx=5, pady=5)
         self.base_series_var = tk.StringVar()
-        series_options = [f"{s.name} ({s.legend_label})" for s in self.all_series.values()]
-        ttk.Combobox(select_frame, textvariable=self.base_series_var,
-                     values=series_options, state='readonly', width=40).pack(pady=5)
+        series_options = [f"{s.name}" for s in self.all_series.values()]
+        self.base_series_combo = ttk.Combobox(select_frame, textvariable=self.base_series_var,
+                                              values=series_options, state='readonly', width=40)
+        self.base_series_combo.grid(row=0, column=1, padx=5, pady=5)
+        self.base_series_combo.bind('<<ComboboxSelected>>', self.on_base_series_selected)
 
-        # Window size setting
-        window_frame = ttk.Frame(select_frame)
-        window_frame.pack(fill='x', pady=5)
+        # Time range selection
+        range_frame = ttk.LabelFrame(base_frame, text="Time Range Selection", padding=10)
+        range_frame.pack(fill='x', padx=5, pady=5)
 
-        ttk.Label(window_frame, text="Window Size (minutes):").pack(side='left', padx=5)
+        ttk.Label(range_frame, text="Start:").grid(row=0, column=0, sticky='w', padx=5, pady=5)
+        self.base_start_var = tk.StringVar()
+        self.base_start_entry = ttk.Entry(range_frame, textvariable=self.base_start_var, width=20)
+        self.base_start_entry.grid(row=0, column=1, padx=5, pady=5)
+
+        ttk.Label(range_frame, text="End:").grid(row=0, column=2, sticky='w', padx=5, pady=5)
+        self.base_end_var = tk.StringVar()
+        self.base_end_entry = ttk.Entry(range_frame, textvariable=self.base_end_var, width=20)
+        self.base_end_entry.grid(row=0, column=3, padx=5, pady=5)
+
+        # Data info label
+        self.base_info_label = ttk.Label(range_frame, text="", foreground='gray')
+        self.base_info_label.grid(row=1, column=0, columnspan=4, pady=5)
+
+        # Analysis parameters
+        param_frame = ttk.LabelFrame(base_frame, text="Analysis Parameters", padding=10)
+        param_frame.pack(fill='x', padx=5, pady=5)
+
+        ttk.Label(param_frame, text="Window Size (minutes):").grid(row=0, column=0, sticky='w', padx=5, pady=5)
         self.window_size_var = tk.IntVar(value=10)
-        ttk.Spinbox(window_frame, from_=1, to=60, textvariable=self.window_size_var, width=10).pack(side='left', padx=5)
+        ttk.Spinbox(param_frame, from_=1, to=60, textvariable=self.window_size_var, width=10).grid(row=0, column=1,
+                                                                                                   padx=5, pady=5)
 
-        ttk.Button(select_frame, text="Calculate Base Pressure",
-                   command=self.calculate_base_pressure).pack(pady=5)
+        ttk.Button(param_frame, text="Calculate Base Pressure",
+                   command=self.calculate_base_pressure).grid(row=0, column=2, padx=20, pady=5)
 
-        # Results display
+        # Results
         results_frame = ttk.LabelFrame(base_frame, text="Analysis Results", padding=10)
         results_frame.pack(fill='both', expand=True, padx=5, pady=5)
 
-        # Create text widget for results
         self.base_text = tk.Text(results_frame, wrap='word', font=('Consolas', 10))
         base_scroll = ttk.Scrollbar(results_frame, command=self.base_text.yview)
         self.base_text.config(yscrollcommand=base_scroll.set)
@@ -911,55 +916,89 @@ class VacuumAnalysisDialog:
         self.base_text.pack(side='left', fill='both', expand=True)
         base_scroll.pack(side='right', fill='y')
 
-        # Visualization frame
-        viz_frame = ttk.LabelFrame(base_frame, text="Visualization", padding=10)
-        viz_frame.pack(fill='x', padx=5, pady=5)
+        # Action buttons
+        action_frame = ttk.Frame(base_frame)
+        action_frame.pack(fill='x', padx=5, pady=5)
 
-        ttk.Button(viz_frame, text="Add Base Pressure Line to Plot",
-                   command=self.add_base_pressure_line).pack(pady=5)
+        ttk.Button(action_frame, text="Add Base Pressure Line to Plot",
+                   command=self.add_base_pressure_line).pack(side='left', padx=5)
 
-    def create_noise_analysis_tab(self, notebook):
-        """Create noise analysis tab"""
-        noise_frame = ttk.Frame(notebook)
-        notebook.add(noise_frame, text='📊 Noise Analysis')
+    def create_spike_detection_tab(self, notebook):
+        """Enhanced spike detection with region highlighting"""
+        spike_frame = ttk.Frame(notebook)
+        notebook.add(spike_frame, text='⚡ Spike Detection')
 
         # Configuration
-        config_frame = ttk.LabelFrame(noise_frame, text="Noise Analysis Settings", padding=10)
+        config_frame = ttk.LabelFrame(spike_frame, text="Spike Detection Settings", padding=10)
         config_frame.pack(fill='x', padx=5, pady=5)
 
-        # Series selection
         ttk.Label(config_frame, text="Series:").grid(row=0, column=0, sticky='w', padx=5, pady=5)
-        self.noise_series_var = tk.StringVar()
-        series_options = [f"{s.name} ({s.legend_label})" for s in self.all_series.values()]
-        ttk.Combobox(config_frame, textvariable=self.noise_series_var,
-                     values=series_options, state='readonly', width=30).grid(row=0, column=1, padx=5, pady=5)
+        self.spike_series_var = tk.StringVar()
+        series_options = [f"{s.name}" for s in self.all_series.values()]
+        ttk.Combobox(config_frame, textvariable=self.spike_series_var,
+                     values=series_options, state='readonly', width=30).grid(row=0, column=1, columnspan=2, padx=5,
+                                                                             pady=5)
 
-        # Sample rate
-        ttk.Label(config_frame, text="Sample Rate (Hz):").grid(row=1, column=0, sticky='w', padx=5, pady=5)
-        self.sample_rate_var = tk.DoubleVar(value=1.0)
-        ttk.Entry(config_frame, textvariable=self.sample_rate_var, width=15).grid(row=1, column=1, sticky='w', padx=5,
-                                                                                  pady=5)
+        # Detection parameters
+        ttk.Label(config_frame, text="Threshold (σ):").grid(row=1, column=0, sticky='w', padx=5, pady=5)
+        self.spike_threshold_var = tk.DoubleVar(value=3.0)
+        ttk.Scale(config_frame, from_=1.0, to=10.0, variable=self.spike_threshold_var,
+                  orient='horizontal', length=200).grid(row=1, column=1, padx=5, pady=5)
+        self.spike_threshold_label = ttk.Label(config_frame, text="3.0")
+        self.spike_threshold_label.grid(row=1, column=2, padx=5, pady=5)
 
-        ttk.Button(config_frame, text="Analyze Noise",
-                   command=self.analyze_noise).grid(row=2, column=1, pady=10)
+        self.spike_threshold_var.trace('w', lambda *args: self.spike_threshold_label.config(
+            text=f"{self.spike_threshold_var.get():.1f}"))
+
+        ttk.Label(config_frame, text="Min Duration (points):").grid(row=2, column=0, sticky='w', padx=5, pady=5)
+        self.spike_duration_var = tk.IntVar(value=1)
+        ttk.Spinbox(config_frame, from_=1, to=100, textvariable=self.spike_duration_var,
+                    width=10).grid(row=2, column=1, sticky='w', padx=5, pady=5)
+
+        ttk.Label(config_frame, text="Time Window (points):").grid(row=3, column=0, sticky='w', padx=5, pady=5)
+        self.spike_window_var = tk.IntVar(value=100)
+        ttk.Spinbox(config_frame, from_=10, to=1000, textvariable=self.spike_window_var,
+                    width=10).grid(row=3, column=1, sticky='w', padx=5, pady=5)
+
+        # Color selection
+        ttk.Label(config_frame, text="Highlight Color:").grid(row=4, column=0, sticky='w', padx=5, pady=5)
+        self.spike_color_var = tk.StringVar(value='red')
+        color_frame = ttk.Frame(config_frame)
+        color_frame.grid(row=4, column=1, columnspan=2, sticky='w', padx=5, pady=5)
+
+        colors = ['red', 'orange', 'yellow', 'purple', 'blue']
+        for color in colors:
+            ttk.Radiobutton(color_frame, text=color.capitalize(), value=color,
+                            variable=self.spike_color_var).pack(side='left', padx=5)
+
+        ttk.Button(config_frame, text="Detect Spikes",
+                   command=self.detect_spikes).grid(row=5, column=1, pady=10)
 
         # Results
-        results_frame = ttk.LabelFrame(noise_frame, text="Noise Metrics", padding=10)
+        results_frame = ttk.LabelFrame(spike_frame, text="Detected Spikes", padding=10)
         results_frame.pack(fill='both', expand=True, padx=5, pady=5)
 
-        self.noise_text = tk.Text(results_frame, wrap='word', font=('Consolas', 10), height=10)
-        noise_scroll = ttk.Scrollbar(results_frame, command=self.noise_text.yview)
-        self.noise_text.config(yscrollcommand=noise_scroll.set)
+        columns = ['#', 'Start Time', 'End Time', 'Duration', 'Max Pressure', 'Severity']
+        self.spikes_tree = ttk.Treeview(results_frame, columns=columns, show='headings', height=10)
 
-        self.noise_text.pack(side='left', fill='both', expand=True)
-        noise_scroll.pack(side='right', fill='y')
+        for col in columns:
+            self.spikes_tree.heading(col, text=col)
+            self.spikes_tree.column(col, width=120)
 
-        # Spectrum plot frame
-        spectrum_frame = ttk.LabelFrame(noise_frame, text="Frequency Spectrum", padding=10)
-        spectrum_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        spikes_scroll = ttk.Scrollbar(results_frame, orient='vertical', command=self.spikes_tree.yview)
+        self.spikes_tree.configure(yscrollcommand=spikes_scroll.set)
 
-        # Placeholder for spectrum plot
-        ttk.Label(spectrum_frame, text="Spectrum plot will be shown here").pack(expand=True)
+        self.spikes_tree.pack(side='left', fill='both', expand=True)
+        spikes_scroll.pack(side='right', fill='y')
+
+        # Action buttons
+        action_frame = ttk.Frame(spike_frame)
+        action_frame.pack(fill='x', padx=5, pady=5)
+
+        ttk.Button(action_frame, text="Highlight All Spikes on Plot",
+                   command=self.highlight_spikes).pack(side='left', padx=5)
+        ttk.Button(action_frame, text="Clear Spike Highlights",
+                   command=self.clear_spike_highlights).pack(side='left', padx=5)
 
     def create_spike_detection_tab(self, notebook):
         """Create spike detection tab"""
@@ -1014,27 +1053,54 @@ class VacuumAnalysisDialog:
         ttk.Button(action_frame, text="Export Spike Data",
                    command=self.export_spike_data).pack(side='left', padx=5)
 
-    def create_leak_rate_tab(self, notebook):
-        """Create leak rate analysis tab"""
+    def create_leak_detection_tab(self, notebook):
+        """Enhanced leak detection with region highlighting"""
         leak_frame = ttk.Frame(notebook)
-        notebook.add(leak_frame, text='💨 Leak Rate')
+        notebook.add(leak_frame, text='💨 Leak Detection')
 
         # Configuration
-        config_frame = ttk.LabelFrame(leak_frame, text="Leak Rate Analysis", padding=10)
+        config_frame = ttk.LabelFrame(leak_frame, text="Leak Detection Settings", padding=10)
         config_frame.pack(fill='x', padx=5, pady=5)
 
-        # Series selection
         ttk.Label(config_frame, text="Series:").grid(row=0, column=0, sticky='w', padx=5, pady=5)
         self.leak_series_var = tk.StringVar()
-        series_options = [f"{s.name} ({s.legend_label})" for s in self.all_series.values()]
+        series_options = [f"{s.name}" for s in self.all_series.values()]
         ttk.Combobox(config_frame, textvariable=self.leak_series_var,
-                     values=series_options, state='readonly', width=30).grid(row=0, column=1, padx=5, pady=5)
+                     values=series_options, state='readonly', width=30).grid(row=0, column=1, columnspan=2, padx=5,
+                                                                             pady=5)
 
-        ttk.Button(config_frame, text="Calculate Leak Rate",
-                   command=self.calculate_leak_rate).grid(row=1, column=1, pady=10)
+        # Detection parameters
+        ttk.Label(config_frame, text="Noise Threshold:").grid(row=1, column=0, sticky='w', padx=5, pady=5)
+        self.leak_threshold_var = tk.DoubleVar(value=0.01)
+        ttk.Entry(config_frame, textvariable=self.leak_threshold_var, width=15).grid(row=1, column=1, sticky='w',
+                                                                                     padx=5, pady=5)
+
+        ttk.Label(config_frame, text="Min Duration (points):").grid(row=2, column=0, sticky='w', padx=5, pady=5)
+        self.leak_duration_var = tk.IntVar(value=50)
+        ttk.Spinbox(config_frame, from_=10, to=500, textvariable=self.leak_duration_var,
+                    width=15).grid(row=2, column=1, sticky='w', padx=5, pady=5)
+
+        ttk.Label(config_frame, text="Slope Threshold:").grid(row=3, column=0, sticky='w', padx=5, pady=5)
+        self.leak_slope_var = tk.DoubleVar(value=0.001)
+        ttk.Entry(config_frame, textvariable=self.leak_slope_var, width=15).grid(row=3, column=1, sticky='w', padx=5,
+                                                                                 pady=5)
+
+        # Color selection
+        ttk.Label(config_frame, text="Highlight Color:").grid(row=4, column=0, sticky='w', padx=5, pady=5)
+        self.leak_color_var = tk.StringVar(value='orange')
+        color_frame = ttk.Frame(config_frame)
+        color_frame.grid(row=4, column=1, columnspan=2, sticky='w', padx=5, pady=5)
+
+        colors = ['orange', 'red', 'yellow', 'purple', 'brown']
+        for color in colors:
+            ttk.Radiobutton(color_frame, text=color.capitalize(), value=color,
+                            variable=self.leak_color_var).pack(side='left', padx=5)
+
+        ttk.Button(config_frame, text="Detect Leaks",
+                   command=self.detect_leaks).grid(row=5, column=1, pady=10)
 
         # Results
-        results_frame = ttk.LabelFrame(leak_frame, text="Leak Rate Results", padding=10)
+        results_frame = ttk.LabelFrame(leak_frame, text="Detected Leak Regions", padding=10)
         results_frame.pack(fill='both', expand=True, padx=5, pady=5)
 
         self.leak_text = tk.Text(results_frame, wrap='word', font=('Consolas', 10), height=10)
@@ -1044,34 +1110,59 @@ class VacuumAnalysisDialog:
         self.leak_text.pack(side='left', fill='both', expand=True)
         leak_scroll.pack(side='right', fill='y')
 
-        # Fit plot frame
-        fit_frame = ttk.LabelFrame(leak_frame, text="Leak Rate Fit", padding=10)
-        fit_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        # Action buttons
+        action_frame = ttk.Frame(leak_frame)
+        action_frame.pack(fill='x', padx=5, pady=5)
 
-        # Placeholder for fit plot
-        ttk.Label(fit_frame, text="Leak rate fit plot will be shown here").pack(expand=True)
+        ttk.Button(action_frame, text="Highlight Leak Regions",
+                   command=self.highlight_leaks).pack(side='left', padx=5)
+        ttk.Button(action_frame, text="Clear Leak Highlights",
+                   command=self.clear_leak_highlights).pack(side='left', padx=5)
 
     def create_pumpdown_tab(self, notebook):
-        """Create pump-down analysis tab"""
+        """Enhanced pump-down analysis with cycle detection"""
         pump_frame = ttk.Frame(notebook)
         notebook.add(pump_frame, text='📉 Pump-down')
 
         # Configuration
-        config_frame = ttk.LabelFrame(pump_frame, text="Pump-down Analysis", padding=10)
+        config_frame = ttk.LabelFrame(pump_frame, text="Pump-down Detection Settings", padding=10)
         config_frame.pack(fill='x', padx=5, pady=5)
 
-        # Series selection
         ttk.Label(config_frame, text="Series:").grid(row=0, column=0, sticky='w', padx=5, pady=5)
         self.pump_series_var = tk.StringVar()
-        series_options = [f"{s.name} ({s.legend_label})" for s in self.all_series.values()]
+        series_options = [f"{s.name}" for s in self.all_series.values()]
         ttk.Combobox(config_frame, textvariable=self.pump_series_var,
-                     values=series_options, state='readonly', width=30).grid(row=0, column=1, padx=5, pady=5)
+                     values=series_options, state='readonly', width=30).grid(row=0, column=1, columnspan=2, padx=5,
+                                                                             pady=5)
 
-        ttk.Button(config_frame, text="Analyze Pump-down",
-                   command=self.analyze_pumpdown).grid(row=1, column=1, pady=10)
+        # Detection parameters
+        ttk.Label(config_frame, text="Min Pressure Drop:").grid(row=1, column=0, sticky='w', padx=5, pady=5)
+        self.pump_drop_var = tk.DoubleVar(value=0.5)
+        ttk.Entry(config_frame, textvariable=self.pump_drop_var, width=15).grid(row=1, column=1, sticky='w', padx=5,
+                                                                                pady=5)
+        ttk.Label(config_frame, text="(orders of magnitude)").grid(row=1, column=2, sticky='w', padx=5, pady=5)
+
+        ttk.Label(config_frame, text="Min Duration (points):").grid(row=2, column=0, sticky='w', padx=5, pady=5)
+        self.pump_duration_var = tk.IntVar(value=20)
+        ttk.Spinbox(config_frame, from_=5, to=500, textvariable=self.pump_duration_var,
+                    width=15).grid(row=2, column=1, sticky='w', padx=5, pady=5)
+
+        # Color selection
+        ttk.Label(config_frame, text="Highlight Color:").grid(row=3, column=0, sticky='w', padx=5, pady=5)
+        self.pump_color_var = tk.StringVar(value='green')
+        color_frame = ttk.Frame(config_frame)
+        color_frame.grid(row=3, column=1, columnspan=2, sticky='w', padx=5, pady=5)
+
+        colors = ['green', 'blue', 'cyan', 'teal', 'lime']
+        for color in colors:
+            ttk.Radiobutton(color_frame, text=color.capitalize(), value=color,
+                            variable=self.pump_color_var).pack(side='left', padx=5)
+
+        ttk.Button(config_frame, text="Detect Pump-down Cycles",
+                   command=self.detect_pumpdowns).grid(row=4, column=1, pady=10)
 
         # Results
-        results_frame = ttk.LabelFrame(pump_frame, text="Pump-down Characteristics", padding=10)
+        results_frame = ttk.LabelFrame(pump_frame, text="Detected Pump-down Cycles", padding=10)
         results_frame.pack(fill='both', expand=True, padx=5, pady=5)
 
         self.pump_text = tk.Text(results_frame, wrap='word', font=('Consolas', 10))
@@ -1080,6 +1171,439 @@ class VacuumAnalysisDialog:
 
         self.pump_text.pack(side='left', fill='both', expand=True)
         pump_scroll.pack(side='right', fill='y')
+
+        # Action buttons
+        action_frame = ttk.Frame(pump_frame)
+        action_frame.pack(fill='x', padx=5, pady=5)
+
+        ttk.Button(action_frame, text="Highlight Pump-down Cycles",
+                   command=self.highlight_pumpdowns).pack(side='left', padx=5)
+        ttk.Button(action_frame, text="Clear Pump-down Highlights",
+                   command=self.clear_pumpdown_highlights).pack(side='left', padx=5)
+
+    def on_base_series_selected(self, event=None):
+        """Update info when series is selected"""
+        series_name = self.base_series_var.get()
+        for s in self.all_series.values():
+            if s.name == series_name:
+                file_data = self.loaded_files[s.file_id]
+                # Update time range info
+                if s.x_column != 'Index':
+                    x_data = file_data.df.iloc[s.start_index:s.end_index or len(file_data.df)][s.x_column]
+                    self.base_start_var.set(str(x_data.iloc[0]))
+                    self.base_end_var.set(str(x_data.iloc[-1]))
+                    self.base_info_label.config(text=f"Data range: {len(x_data)} points")
+                break
+
+    def detect_spikes(self):
+        """Enhanced spike detection"""
+        series_name = self.spike_series_var.get()
+        if not series_name:
+            messagebox.showwarning("Warning", "Please select a series")
+            return
+
+        # Clear previous results
+        for item in self.spikes_tree.get_children():
+            self.spikes_tree.delete(item)
+        self.spike_results = []
+
+        # Find series
+        series = None
+        for s in self.all_series.values():
+            if s.name == series_name:
+                series = s
+                break
+
+        if not series:
+            return
+
+        # Get data
+        file_data = self.loaded_files[series.file_id]
+        start_idx = series.start_index
+        end_idx = series.end_index or len(file_data.df)
+        data_slice = file_data.df.iloc[start_idx:end_idx]
+
+        y_data = data_slice[series.y_column].values
+        if series.x_column == 'Index':
+            x_data = np.arange(len(y_data))
+        else:
+            x_data = data_slice[series.x_column].values
+
+        # Enhanced spike detection with rolling window
+        threshold_factor = self.spike_threshold_var.get()
+        min_duration = self.spike_duration_var.get()
+        window_size = self.spike_window_var.get()
+
+        # Rolling statistics
+        y_series = pd.Series(y_data)
+        rolling_mean = y_series.rolling(window=window_size, center=True).mean()
+        rolling_std = y_series.rolling(window=window_size, center=True).std()
+
+        # Dynamic threshold
+        threshold = rolling_mean + threshold_factor * rolling_std
+
+        # Find spikes
+        spike_mask = y_data > threshold
+
+        # Group consecutive spikes
+        spike_start = None
+        for i in range(len(spike_mask)):
+            if spike_mask[i] and spike_start is None:
+                spike_start = i
+            elif not spike_mask[i] and spike_start is not None:
+                duration = i - spike_start
+                if duration >= min_duration:
+                    max_idx = spike_start + np.argmax(y_data[spike_start:i])
+                    max_pressure = y_data[max_idx]
+
+                    # Determine severity
+                    if max_pressure > rolling_mean.iloc[spike_start] * 10:
+                        severity = 'Critical'
+                    elif max_pressure > rolling_mean.iloc[spike_start] * 5:
+                        severity = 'High'
+                    elif max_pressure > rolling_mean.iloc[spike_start] * 2:
+                        severity = 'Medium'
+                    else:
+                        severity = 'Low'
+
+                    spike_info = {
+                        'start': spike_start,
+                        'end': i,
+                        'max_idx': max_idx,
+                        'duration': duration,
+                        'max_pressure': max_pressure,
+                        'severity': severity,
+                        'x_start': x_data[spike_start],
+                        'x_end': x_data[i - 1] if i > 0 else x_data[0],
+                        'x_max': x_data[max_idx]
+                    }
+
+                    self.spike_results.append(spike_info)
+
+                    # Add to tree
+                    self.spikes_tree.insert('', 'end', values=[
+                        len(self.spike_results),
+                        f"{x_data[spike_start]:.2f}",
+                        f"{x_data[i - 1]:.2f}" if i > 0 else f"{x_data[0]:.2f}",
+                        duration,
+                        f"{max_pressure:.2e}",
+                        severity
+                    ])
+
+                spike_start = None
+
+        if len(self.spike_results) > 0:
+            messagebox.showinfo("Success", f"Detected {len(self.spike_results)} spikes")
+        else:
+            messagebox.showinfo("Info", "No spikes detected with current settings")
+
+    def highlight_spikes(self):
+        """Add spike annotations to plot"""
+        if not self.spike_results:
+            messagebox.showwarning("Warning", "No spikes to highlight. Run detection first.")
+            return
+
+        if hasattr(self.parent, 'annotation_manager'):
+            color = self.spike_color_var.get()
+            for i, spike in enumerate(self.spike_results):
+                self.parent.annotation_manager.add_spike_annotation(
+                    spike['x_start'],
+                    spike['x_end'],
+                    spike['max_pressure'],
+                    label=f"Spike {i + 1}: {spike['severity']}",
+                    color=color
+                )
+
+            # Refresh plot
+            if hasattr(self.parent, 'create_plot'):
+                self.parent.create_plot()
+
+            messagebox.showinfo("Success", f"Added {len(self.spike_results)} spike annotations")
+
+    def detect_leaks(self):
+        """Enhanced leak detection"""
+        series_name = self.leak_series_var.get()
+        if not series_name:
+            messagebox.showwarning("Warning", "Please select a series")
+            return
+
+        self.leak_results = []
+        self.leak_text.delete(1.0, tk.END)
+
+        # Find series
+        series = None
+        for s in self.all_series.values():
+            if s.name == series_name:
+                series = s
+                break
+
+        if not series:
+            return
+
+        # Get data
+        file_data = self.loaded_files[series.file_id]
+        start_idx = series.start_index
+        end_idx = series.end_index or len(file_data.df)
+        data_slice = file_data.df.iloc[start_idx:end_idx]
+
+        y_data = data_slice[series.y_column].values
+        if series.x_column == 'Index':
+            x_data = np.arange(len(y_data))
+        else:
+            x_data = data_slice[series.x_column].values
+
+        # Parameters
+        noise_threshold = self.leak_threshold_var.get()
+        min_duration = self.leak_duration_var.get()
+        slope_threshold = self.leak_slope_var.get()
+
+        # Sliding window leak detection
+        window_size = min_duration
+
+        result_text = "LEAK DETECTION RESULTS\n" + "=" * 50 + "\n\n"
+
+        for i in range(0, len(y_data) - window_size, window_size // 2):
+            window_y = y_data[i:i + window_size]
+            window_x = x_data[i:i + window_size]
+
+            # Check for steady rise
+            if len(window_y) < 2:
+                continue
+
+            # Fit linear regression
+            coeffs = np.polyfit(np.arange(len(window_y)), window_y, 1)
+            slope = coeffs[0]
+
+            # Calculate fit quality
+            fitted = np.polyval(coeffs, np.arange(len(window_y)))
+            residuals = window_y - fitted
+            noise = np.std(residuals)
+
+            # Check if it's a leak
+            if slope > slope_threshold and noise < noise_threshold:
+                leak_rate = slope * np.mean(window_y)  # Approximate leak rate
+
+                leak_info = {
+                    'start': i,
+                    'end': i + window_size,
+                    'x_start': window_x[0],
+                    'x_end': window_x[-1],
+                    'slope': slope,
+                    'leak_rate': leak_rate,
+                    'noise': noise
+                }
+
+                self.leak_results.append(leak_info)
+
+                result_text += f"Leak Region {len(self.leak_results)}:\n"
+                result_text += f"  Time: {window_x[0]:.2f} to {window_x[-1]:.2f}\n"
+                result_text += f"  Leak Rate: {leak_rate:.2e} mbar·L/s\n"
+                result_text += f"  Slope: {slope:.2e}\n"
+                result_text += f"  Noise: {noise:.2e}\n\n"
+
+        self.leak_text.insert(1.0, result_text)
+
+        if len(self.leak_results) > 0:
+            messagebox.showinfo("Success", f"Detected {len(self.leak_results)} leak regions")
+        else:
+            messagebox.showinfo("Info", "No leaks detected with current settings")
+
+    def highlight_leaks(self):
+        """Add leak annotations to plot"""
+        if not self.leak_results:
+            messagebox.showwarning("Warning", "No leaks to highlight. Run detection first.")
+            return
+
+        if hasattr(self.parent, 'annotation_manager'):
+            color = self.leak_color_var.get()
+            for i, leak in enumerate(self.leak_results):
+                self.parent.annotation_manager.add_leak_annotation(
+                    leak['x_start'],
+                    leak['x_end'],
+                    leak['slope'],
+                    label=f"Leak {i + 1}: {leak['leak_rate']:.2e} mbar·L/s",
+                    color=color
+                )
+
+            # Refresh plot
+            if hasattr(self.parent, 'create_plot'):
+                self.parent.create_plot()
+
+            messagebox.showinfo("Success", f"Added {len(self.leak_results)} leak annotations")
+
+    def detect_pumpdowns(self):
+        """Enhanced pump-down cycle detection"""
+        series_name = self.pump_series_var.get()
+        if not series_name:
+            messagebox.showwarning("Warning", "Please select a series")
+            return
+
+        self.pumpdown_results = []
+        self.pump_text.delete(1.0, tk.END)
+
+        # Find series
+        series = None
+        for s in self.all_series.values():
+            if s.name == series_name:
+                series = s
+                break
+
+        if not series:
+            return
+
+        # Get data
+        file_data = self.loaded_files[series.file_id]
+        start_idx = series.start_index
+        end_idx = series.end_index or len(file_data.df)
+        data_slice = file_data.df.iloc[start_idx:end_idx]
+
+        y_data = data_slice[series.y_column].values
+        if series.x_column == 'Index':
+            x_data = np.arange(len(y_data))
+        else:
+            x_data = data_slice[series.x_column].values
+
+        # Parameters
+        min_drop = self.pump_drop_var.get()  # Orders of magnitude
+        min_duration = self.pump_duration_var.get()
+
+        # Find pump-down cycles
+        result_text = "PUMP-DOWN CYCLE DETECTION\n" + "=" * 50 + "\n\n"
+
+        # Calculate derivative to find rapid pressure drops
+        dy_dx = np.gradient(np.log10(y_data + 1e-10))  # Log scale gradient
+
+        # Find regions of significant negative gradient
+        pump_threshold = -0.01  # Threshold for pump-down detection
+        pump_mask = dy_dx < pump_threshold
+
+        # Group consecutive pump-down points
+        pump_start = None
+        for i in range(len(pump_mask)):
+            if pump_mask[i] and pump_start is None:
+                pump_start = i
+            elif not pump_mask[i] and pump_start is not None:
+                duration = i - pump_start
+                if duration >= min_duration:
+                    # Check pressure drop
+                    p_initial = y_data[pump_start]
+                    p_final = y_data[i - 1]
+
+                    if p_initial > 0 and p_final > 0:
+                        pressure_drop = np.log10(p_initial / p_final)
+
+                        if pressure_drop >= min_drop:
+                            # Calculate time to base
+                            time_to_base = x_data[i - 1] - x_data[pump_start]
+
+                            pumpdown_info = {
+                                'start': pump_start,
+                                'end': i,
+                                'x_start': x_data[pump_start],
+                                'x_end': x_data[i - 1],
+                                'p_initial': p_initial,
+                                'p_final': p_final,
+                                'pressure_drop': pressure_drop,
+                                'time_to_base': time_to_base,
+                                'duration': duration
+                            }
+
+                            self.pumpdown_results.append(pumpdown_info)
+
+                            result_text += f"Pump-down Cycle {len(self.pumpdown_results)}:\n"
+                            result_text += f"  Time Range: {x_data[pump_start]:.2f} to {x_data[i - 1]:.2f}\n"
+                            result_text += f"  Initial Pressure: {p_initial:.2e} mbar\n"
+                            result_text += f"  Final Pressure: {p_final:.2e} mbar\n"
+                            result_text += f"  Pressure Drop: {pressure_drop:.1f} orders\n"
+                            result_text += f"  Time to Base: {time_to_base:.1f} units\n"
+                            result_text += f"  Pumping Speed: {pressure_drop / time_to_base:.2f} orders/unit\n\n"
+
+                pump_start = None
+
+        self.pump_text.insert(1.0, result_text)
+
+        if len(self.pumpdown_results) > 0:
+            messagebox.showinfo("Success", f"Detected {len(self.pumpdown_results)} pump-down cycles")
+        else:
+            messagebox.showinfo("Info", "No pump-down cycles detected with current settings")
+
+    def highlight_pumpdowns(self):
+        """Add pump-down annotations to plot"""
+        if not self.pumpdown_results:
+            messagebox.showwarning("Warning", "No pump-downs to highlight. Run detection first.")
+            return
+
+        if hasattr(self.parent, 'annotation_manager'):
+            color = self.pump_color_var.get()
+            for i, pumpdown in enumerate(self.pumpdown_results):
+                self.parent.annotation_manager.add_pumpdown_annotation(
+                    pumpdown['x_start'],
+                    pumpdown['x_end'],
+                    pumpdown['p_initial'],
+                    pumpdown['p_final'],
+                    pumpdown['time_to_base'],
+                    label=f"Pump-down {i + 1}"
+                )
+
+            # Refresh plot
+            if hasattr(self.parent, 'create_plot'):
+                self.parent.create_plot()
+
+            messagebox.showinfo("Success", f"Added {len(self.pumpdown_results)} pump-down annotations")
+
+    def clear_spike_highlights(self):
+        """Clear spike annotations"""
+        if hasattr(self.parent, 'annotation_manager'):
+            # Remove spike annotations
+            to_remove = []
+            for ann_id, ann in self.parent.annotation_manager.annotations.items():
+                if ann['type'] == 'spike_region':
+                    to_remove.append(ann_id)
+
+            for ann_id in to_remove:
+                self.parent.annotation_manager.remove_annotation(ann_id)
+
+            # Refresh plot
+            if hasattr(self.parent, 'create_plot'):
+                self.parent.create_plot()
+
+            messagebox.showinfo("Success", "Cleared spike highlights")
+
+    def clear_leak_highlights(self):
+        """Clear leak annotations"""
+        if hasattr(self.parent, 'annotation_manager'):
+            # Remove leak annotations
+            to_remove = []
+            for ann_id, ann in self.parent.annotation_manager.annotations.items():
+                if ann['type'] == 'leak_region':
+                    to_remove.append(ann_id)
+
+            for ann_id in to_remove:
+                self.parent.annotation_manager.remove_annotation(ann_id)
+
+            # Refresh plot
+            if hasattr(self.parent, 'create_plot'):
+                self.parent.create_plot()
+
+            messagebox.showinfo("Success", "Cleared leak highlights")
+
+    def clear_pumpdown_highlights(self):
+        """Clear pump-down annotations"""
+        if hasattr(self.parent, 'annotation_manager'):
+            # Remove pump-down annotations
+            to_remove = []
+            for ann_id, ann in self.parent.annotation_manager.annotations.items():
+                if ann['type'] == 'pumpdown_region':
+                    to_remove.append(ann_id)
+
+            for ann_id in to_remove:
+                self.parent.annotation_manager.remove_annotation(ann_id)
+
+            # Refresh plot
+            if hasattr(self.parent, 'create_plot'):
+                self.parent.create_plot()
+
+            messagebox.showinfo("Success", "Cleared pump-down highlights")
 
     def calculate_base_pressure(self):
         """Calculate base pressure for selected series"""
@@ -1470,85 +1994,89 @@ class VacuumAnalysisDialog:
 
 class AnnotationDialog:
     """
-    Modern annotation dialog with inline editing and vacuum templates
-    Allows adding, editing, and removing annotations
+    Enhanced annotation dialog with data-aware positioning
     """
 
     def __init__(self, parent, annotation_manager, figure=None, ax=None):
-        """
-        Initialize annotation dialog
-
-        Args:
-            parent: Parent window
-            annotation_manager: AnnotationManager instance
-            figure: Matplotlib figure (optional)
-            axes: Matplotlib axes (optional)
-        """
         self.parent = parent
         self.annotation_manager = annotation_manager
         self.figure = figure
         self.ax = ax
         self.selected_annotation = None
-        self.dragging = False
-        self.drag_data = None
+
+        # Get current data ranges if available
+        if self.ax:
+            self.annotation_manager.set_data_context(self.ax)
 
         self.dialog = tk.Toplevel(parent)
-        self.dialog.title("Annotations")
-        self.dialog.geometry("900x700")
+        self.dialog.title("Enhanced Annotations")
+        self.dialog.geometry("1000x700")
         self.dialog.configure(bg='#f5f5f5')
 
         self.dialog.transient(parent)
         self.dialog.grab_set()
 
         self.create_widgets()
-
-        # If figure is provided, set up interactive editing
-        if self.figure and self.ax:
-            self.setup_interactive_editing()
-
         self.dialog.geometry("+%d+%d" % (parent.winfo_rootx() + 50, parent.winfo_rooty() + 50))
 
     def create_widgets(self):
-        """Create modern annotation interface"""
+        """Create enhanced annotation interface"""
         # Header
         header = tk.Frame(self.dialog, bg='#34495e', height=60)
         header.pack(fill='x')
         header.pack_propagate(False)
 
-        tk.Label(header, text="📍 Plot Annotations",
+        tk.Label(header, text="📍 Enhanced Plot Annotations",
                  font=('Segoe UI', 16, 'bold'),
                  fg='white', bg='#34495e').pack(pady=15)
 
-        # Main container
-        main_container = ttk.Frame(self.dialog)
-        main_container.pack(fill='both', expand=True, padx=10, pady=10)
+        # Main container with paned window
+        main_paned = ttk.PanedWindow(self.dialog, orient='horizontal')
+        main_paned.pack(fill='both', expand=True, padx=10, pady=10)
 
-        # Left panel - annotation types
-        left_panel = ttk.Frame(main_container, width=250)
-        left_panel.pack(side='left', fill='y', padx=(0, 10))
-        left_panel.pack_propagate(False)
+        # Left panel - annotation types and data-aware tools
+        left_frame = ttk.Frame(main_paned, width=300)
+        main_paned.add(left_frame, weight=1)
 
-        self.create_annotation_types_panel(left_panel)
+        self.create_annotation_tools_panel(left_frame)
 
         # Right panel - annotation list and properties
-        right_panel = ttk.Frame(main_container)
-        right_panel.pack(side='left', fill='both', expand=True)
+        right_frame = ttk.Frame(main_paned)
+        main_paned.add(right_frame, weight=2)
 
-        self.create_annotation_list_panel(right_panel)
+        self.create_annotation_list_panel(right_frame)
 
-    def create_annotation_types_panel(self, parent):
-        """Create panel with annotation type buttons"""
-        ttk.Label(parent, text="Add Annotation",
-                  font=('Segoe UI', 12, 'bold')).pack(pady=(0, 10))
+    def create_annotation_tools_panel(self, parent):
+        """Create enhanced annotation tools panel"""
+        # Notebook for organized tools
+        notebook = ttk.Notebook(parent)
+        notebook.pack(fill='both', expand=True)
 
-        # Annotation type buttons with icons
+        # Basic annotations tab
+        basic_frame = ttk.Frame(notebook)
+        notebook.add(basic_frame, text="Basic")
+        self.create_basic_annotations(basic_frame)
+
+        # Data-aware annotations tab
+        data_frame = ttk.Frame(notebook)
+        notebook.add(data_frame, text="Data Points")
+        self.create_data_annotations(data_frame)
+
+        # Quick templates tab
+        template_frame = ttk.Frame(notebook)
+        notebook.add(template_frame, text="Templates")
+        self.create_template_annotations(template_frame)
+
+    def create_basic_annotations(self, parent):
+        """Basic annotation types"""
+        ttk.Label(parent, text="Basic Annotations",
+                  font=('Segoe UI', 12, 'bold')).pack(pady=10)
+
         buttons = [
-            ("➖ Horizontal Line", self.add_horizontal_line),
-            ("│ Vertical Line", self.add_vertical_line),
-            ("▭ Shaded Region", self.add_region),
-            ("● Point Marker", self.add_point),
-            ("T Text Label", self.add_text),
-            ("→ Enhanced Arrow", self.add_enhanced_arrow),
+            ("Horizontal Line", self.add_horizontal_line_dialog),
+            ("Vertical Line", self.add_vertical_line_dialog),
+            ("Rectangle Region", self.add_region_dialog),
+            ("Text Label", self.add_text_dialog),
         ]
 
         for text, command in buttons:
@@ -1556,25 +2084,72 @@ class AnnotationDialog:
                             bg='#3498db', fg='white',
                             font=('Segoe UI', 10),
                             padx=15, pady=10,
-                            relief='flat', cursor='hand2',
-                            anchor='w')
-            btn.pack(fill='x', pady=3)
+                            relief='flat', cursor='hand2')
+            btn.pack(fill='x', padx=10, pady=3)
 
-            # Hover effect
             btn.bind("<Enter>", lambda e, b=btn: b.config(bg='#2980b9'))
             btn.bind("<Leave>", lambda e, b=btn: b.config(bg='#3498db'))
 
-        # Quick templates for vacuum analysis
-        ttk.Separator(parent, orient='horizontal').pack(fill='x', pady=20)
+    def create_data_annotations(self, parent):
+        """Data-aware annotation tools"""
+        ttk.Label(parent, text="Data-Aware Annotations",
+                  font=('Segoe UI', 12, 'bold')).pack(pady=10)
 
-        ttk.Label(parent, text="Vacuum Templates",
-                  font=('Segoe UI', 12, 'bold')).pack(pady=(0, 10))
+        # Data point input frame
+        input_frame = ttk.LabelFrame(parent, text="Data Coordinates", padding=10)
+        input_frame.pack(fill='x', padx=10, pady=10)
+
+        ttk.Label(input_frame, text="X Value:").grid(row=0, column=0, sticky='w', padx=5, pady=5)
+        self.data_x_var = tk.StringVar()
+        self.data_x_entry = ttk.Entry(input_frame, textvariable=self.data_x_var, width=15)
+        self.data_x_entry.grid(row=0, column=1, padx=5, pady=5)
+
+        ttk.Label(input_frame, text="Y Value:").grid(row=1, column=0, sticky='w', padx=5, pady=5)
+        self.data_y_var = tk.StringVar()
+        self.data_y_entry = ttk.Entry(input_frame, textvariable=self.data_y_var, width=15)
+        self.data_y_entry.grid(row=1, column=1, padx=5, pady=5)
+
+        ttk.Label(input_frame, text="Label:").grid(row=2, column=0, sticky='w', padx=5, pady=5)
+        self.data_label_var = tk.StringVar(value="Data Point")
+        ttk.Entry(input_frame, textvariable=self.data_label_var, width=15).grid(row=2, column=1, padx=5, pady=5)
+
+        # Get current point button
+        ttk.Button(input_frame, text="Get From Plot",
+                   command=self.get_point_from_plot).grid(row=3, column=0, columnspan=2, pady=10)
+
+        # Add data point annotation
+        ttk.Button(input_frame, text="Add Data Point",
+                   command=self.add_data_point_annotation).grid(row=4, column=0, columnspan=2, pady=5)
+
+        # Data arrow frame
+        arrow_frame = ttk.LabelFrame(parent, text="Data Arrow", padding=10)
+        arrow_frame.pack(fill='x', padx=10, pady=10)
+
+        ttk.Label(arrow_frame, text="From (X,Y):").grid(row=0, column=0, sticky='w', padx=5, pady=5)
+        self.arrow_x1_var = tk.StringVar()
+        self.arrow_y1_var = tk.StringVar()
+        ttk.Entry(arrow_frame, textvariable=self.arrow_x1_var, width=8).grid(row=0, column=1, padx=2, pady=5)
+        ttk.Entry(arrow_frame, textvariable=self.arrow_y1_var, width=8).grid(row=0, column=2, padx=2, pady=5)
+
+        ttk.Label(arrow_frame, text="To (X,Y):").grid(row=1, column=0, sticky='w', padx=5, pady=5)
+        self.arrow_x2_var = tk.StringVar()
+        self.arrow_y2_var = tk.StringVar()
+        ttk.Entry(arrow_frame, textvariable=self.arrow_x2_var, width=8).grid(row=1, column=1, padx=2, pady=5)
+        ttk.Entry(arrow_frame, textvariable=self.arrow_y2_var, width=8).grid(row=1, column=2, padx=2, pady=5)
+
+        ttk.Button(arrow_frame, text="Add Arrow",
+                   command=self.add_data_arrow_annotation).grid(row=2, column=0, columnspan=3, pady=10)
+
+    def create_template_annotations(self, parent):
+        """Quick template annotations"""
+        ttk.Label(parent, text="Quick Templates",
+                  font=('Segoe UI', 12, 'bold')).pack(pady=10)
 
         templates = [
-            ("🎯 Base Pressure Line", self.add_base_pressure_template),
-            ("📊 Noise Region", self.add_noise_region_template),
-            ("⚡ Spike Markers", self.add_spike_marker_template),
-            ("📉 Pressure Targets", self.add_pressure_targets_template),
+            ("Base Pressure Line", self.add_base_pressure_template),
+            ("Pressure Targets", self.add_pressure_targets_template),
+            ("Process Regions", self.add_process_regions_template),
+            ("Critical Points", self.add_critical_points_template),
         ]
 
         for text, command in templates:
@@ -1582,65 +2157,376 @@ class AnnotationDialog:
                             bg='#27ae60', fg='white',
                             font=('Segoe UI', 9),
                             padx=10, pady=8,
-                            relief='flat', cursor='hand2',
-                            anchor='w')
-            btn.pack(fill='x', pady=2)
+                            relief='flat', cursor='hand2')
+            btn.pack(fill='x', padx=10, pady=2)
 
             btn.bind("<Enter>", lambda e, b=btn: b.config(bg='#229954'))
             btn.bind("<Leave>", lambda e, b=btn: b.config(bg='#27ae60'))
 
-    def create_annotation_list_panel(self, parent):
-        """Create panel showing all annotations with inline editing"""
-        # List header
-        header_frame = ttk.Frame(parent)
-        header_frame.pack(fill='x', pady=(0, 10))
+    def add_horizontal_line_dialog(self):
+        """Add horizontal line with dialog"""
+        dialog = tk.Toplevel(self.dialog)
+        dialog.title("Add Horizontal Line")
+        dialog.geometry("400x300")
+        dialog.transient(self.dialog)
+        dialog.grab_set()
 
-        ttk.Label(header_frame, text="Current Annotations",
-                  font=('Segoe UI', 12, 'bold')).pack(side='left')
+        ttk.Label(dialog, text="Y Position:").grid(row=0, column=0, padx=10, pady=10)
+        y_var = tk.StringVar()
+        y_entry = ttk.Entry(dialog, textvariable=y_var, width=20)
+        y_entry.grid(row=0, column=1, padx=10, pady=10)
 
-        # Action buttons
-        btn_frame = ttk.Frame(header_frame)
-        btn_frame.pack(side='right')
+        # Show current Y range
+        if self.ax:
+            y_min, y_max = self.ax.get_ylim()
+            ttk.Label(dialog, text=f"Current range: {y_min:.2e} to {y_max:.2e}",
+                      foreground='gray').grid(row=1, column=0, columnspan=2, pady=5)
 
-        ttk.Button(btn_frame, text="Clear All",
-                   command=self.clear_all).pack(side='left', padx=2)
-        ttk.Button(btn_frame, text="Export",
-                   command=self.export_annotations).pack(side='left', padx=2)
-        ttk.Button(btn_frame, text="Import",
-                   command=self.import_annotations).pack(side='left', padx=2)
+        ttk.Label(dialog, text="Label:").grid(row=2, column=0, padx=10, pady=10)
+        label_var = tk.StringVar(value="Horizontal Line")
+        ttk.Entry(dialog, textvariable=label_var, width=20).grid(row=2, column=1, padx=10, pady=10)
 
-        # Annotation list with custom styling
-        list_frame = ttk.Frame(parent)
-        list_frame.pack(fill='both', expand=True)
+        ttk.Label(dialog, text="Color:").grid(row=3, column=0, padx=10, pady=10)
+        color_var = tk.StringVar(value="blue")
+        ttk.Combobox(dialog, textvariable=color_var,
+                     values=['red', 'blue', 'green', 'orange', 'purple', 'black'],
+                     width=18).grid(row=3, column=1, padx=10, pady=10)
 
-        # Create canvas for scrollable list
-        self.canvas = tk.Canvas(list_frame, bg='white', highlightthickness=0)
-        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.canvas.yview)
-        self.scrollable_frame = ttk.Frame(self.canvas)
+        ttk.Label(dialog, text="Style:").grid(row=4, column=0, padx=10, pady=10)
+        style_var = tk.StringVar(value="--")
+        ttk.Combobox(dialog, textvariable=style_var,
+                     values=['-', '--', ':', '-.'],
+                     width=18).grid(row=4, column=1, padx=10, pady=10)
 
-        self.scrollable_frame.bind(
-            "<Configure>",
-            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-        )
+        def add_line():
+            try:
+                y_pos = float(y_var.get())
+                ann_id = self.annotation_manager.add_data_annotation(
+                    'hline',
+                    y_pos=y_pos,
+                    label=label_var.get(),
+                    color=color_var.get(),
+                    style=style_var.get(),
+                    width=2
+                )
+                self.update_annotation_list()
+                self.refresh_plot()
+                dialog.destroy()
+            except ValueError:
+                messagebox.showerror("Error", "Please enter a valid Y position")
 
-        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
-        self.canvas.configure(yscrollcommand=scrollbar.set)
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.grid(row=5, column=0, columnspan=2, pady=20)
 
-        self.canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill='y')
+        ttk.Button(btn_frame, text="Add", command=add_line).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Cancel", command=dialog.destroy).pack(side='left', padx=5)
 
-        # Update list
-        self.update_annotation_list()
+    def add_vertical_line_dialog(self):
+        """Add vertical line with dialog"""
+        dialog = tk.Toplevel(self.dialog)
+        dialog.title("Add Vertical Line")
+        dialog.geometry("400x300")
+        dialog.transient(self.dialog)
+        dialog.grab_set()
 
-        # Bottom action bar
-        action_bar = ttk.Frame(parent)
-        action_bar.pack(fill='x', pady=10)
+        ttk.Label(dialog, text="X Position:").grid(row=0, column=0, padx=10, pady=10)
+        x_var = tk.StringVar()
+        x_entry = ttk.Entry(dialog, textvariable=x_var, width=20)
+        x_entry.grid(row=0, column=1, padx=10, pady=10)
 
-        ttk.Button(action_bar, text="Apply & Close",
-                   command=self.apply_and_close,
-                   style='Accent.TButton').pack(side='right', padx=5)
-        ttk.Button(action_bar, text="Cancel",
-                   command=self.cancel).pack(side='right')
+        # Show current X range
+        if self.ax:
+            x_min, x_max = self.ax.get_xlim()
+            ttk.Label(dialog, text=f"Current range: {x_min:.2f} to {x_max:.2f}",
+                      foreground='gray').grid(row=1, column=0, columnspan=2, pady=5)
+
+        ttk.Label(dialog, text="Label:").grid(row=2, column=0, padx=10, pady=10)
+        label_var = tk.StringVar(value="Vertical Line")
+        ttk.Entry(dialog, textvariable=label_var, width=20).grid(row=2, column=1, padx=10, pady=10)
+
+        ttk.Label(dialog, text="Color:").grid(row=3, column=0, padx=10, pady=10)
+        color_var = tk.StringVar(value="red")
+        ttk.Combobox(dialog, textvariable=color_var,
+                     values=['red', 'blue', 'green', 'orange', 'purple', 'black'],
+                     width=18).grid(row=3, column=1, padx=10, pady=10)
+
+        ttk.Label(dialog, text="Style:").grid(row=4, column=0, padx=10, pady=10)
+        style_var = tk.StringVar(value="--")
+        ttk.Combobox(dialog, textvariable=style_var,
+                     values=['-', '--', ':', '-.'],
+                     width=18).grid(row=4, column=1, padx=10, pady=10)
+
+        def add_line():
+            try:
+                x_pos = float(x_var.get())
+                ann_id = self.annotation_manager.add_data_annotation(
+                    'vline',
+                    x_pos=x_pos,
+                    label=label_var.get(),
+                    color=color_var.get(),
+                    style=style_var.get(),
+                    width=2
+                )
+                self.update_annotation_list()
+                self.refresh_plot()
+                dialog.destroy()
+            except ValueError:
+                messagebox.showerror("Error", "Please enter a valid X position")
+
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.grid(row=5, column=0, columnspan=2, pady=20)
+
+        ttk.Button(btn_frame, text="Add", command=add_line).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Cancel", command=dialog.destroy).pack(side='left', padx=5)
+
+    def add_region_dialog(self):
+        """Add rectangular region with dialog"""
+        dialog = tk.Toplevel(self.dialog)
+        dialog.title("Add Region")
+        dialog.geometry("400x350")
+        dialog.transient(self.dialog)
+        dialog.grab_set()
+
+        ttk.Label(dialog, text="X Start:").grid(row=0, column=0, padx=10, pady=10)
+        x_start_var = tk.StringVar()
+        ttk.Entry(dialog, textvariable=x_start_var, width=20).grid(row=0, column=1, padx=10, pady=10)
+
+        ttk.Label(dialog, text="X End:").grid(row=1, column=0, padx=10, pady=10)
+        x_end_var = tk.StringVar()
+        ttk.Entry(dialog, textvariable=x_end_var, width=20).grid(row=1, column=1, padx=10, pady=10)
+
+        # Show current range
+        if self.ax:
+            x_min, x_max = self.ax.get_xlim()
+            ttk.Label(dialog, text=f"Current X range: {x_min:.2f} to {x_max:.2f}",
+                      foreground='gray').grid(row=2, column=0, columnspan=2, pady=5)
+
+        ttk.Label(dialog, text="Label:").grid(row=3, column=0, padx=10, pady=10)
+        label_var = tk.StringVar(value="Region")
+        ttk.Entry(dialog, textvariable=label_var, width=20).grid(row=3, column=1, padx=10, pady=10)
+
+        ttk.Label(dialog, text="Color:").grid(row=4, column=0, padx=10, pady=10)
+        color_var = tk.StringVar(value="yellow")
+        ttk.Combobox(dialog, textvariable=color_var,
+                     values=['yellow', 'red', 'blue', 'green', 'orange', 'purple', 'gray'],
+                     width=18).grid(row=4, column=1, padx=10, pady=10)
+
+        ttk.Label(dialog, text="Alpha:").grid(row=5, column=0, padx=10, pady=10)
+        alpha_var = tk.DoubleVar(value=0.3)
+        ttk.Scale(dialog, from_=0.1, to=0.8, variable=alpha_var,
+                  orient='horizontal', length=150).grid(row=5, column=1, padx=10, pady=10)
+
+        def add_region():
+            try:
+                x_start = float(x_start_var.get())
+                x_end = float(x_end_var.get())
+                ann_id = self.annotation_manager.add_data_annotation(
+                    'region',
+                    x_start=x_start,
+                    x_end=x_end,
+                    label=label_var.get(),
+                    color=color_var.get(),
+                    alpha=alpha_var.get()
+                )
+                self.update_annotation_list()
+                self.refresh_plot()
+                dialog.destroy()
+            except ValueError:
+                messagebox.showerror("Error", "Please enter valid X positions")
+
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.grid(row=6, column=0, columnspan=2, pady=20)
+
+        ttk.Button(btn_frame, text="Add", command=add_region).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Cancel", command=dialog.destroy).pack(side='left', padx=5)
+
+    def add_text_dialog(self):
+        """Add text annotation with dialog"""
+        dialog = tk.Toplevel(self.dialog)
+        dialog.title("Add Text")
+        dialog.geometry("400x400")
+        dialog.transient(self.dialog)
+        dialog.grab_set()
+
+        ttk.Label(dialog, text="X Position:").grid(row=0, column=0, padx=10, pady=10)
+        x_var = tk.StringVar()
+        ttk.Entry(dialog, textvariable=x_var, width=20).grid(row=0, column=1, padx=10, pady=10)
+
+        ttk.Label(dialog, text="Y Position:").grid(row=1, column=0, padx=10, pady=10)
+        y_var = tk.StringVar()
+        ttk.Entry(dialog, textvariable=y_var, width=20).grid(row=1, column=1, padx=10, pady=10)
+
+        # Show current ranges
+        if self.ax:
+            x_min, x_max = self.ax.get_xlim()
+            y_min, y_max = self.ax.get_ylim()
+            ttk.Label(dialog, text=f"X: {x_min:.2f} to {x_max:.2f}, Y: {y_min:.2e} to {y_max:.2e}",
+                      foreground='gray').grid(row=2, column=0, columnspan=2, pady=5)
+
+        ttk.Label(dialog, text="Text:").grid(row=3, column=0, padx=10, pady=10)
+        text_var = tk.StringVar(value="Annotation")
+        text_entry = ttk.Entry(dialog, textvariable=text_var, width=20)
+        text_entry.grid(row=3, column=1, padx=10, pady=10)
+
+        ttk.Label(dialog, text="Font Size:").grid(row=4, column=0, padx=10, pady=10)
+        size_var = tk.IntVar(value=12)
+        ttk.Spinbox(dialog, from_=8, to=24, textvariable=size_var,
+                    width=18).grid(row=4, column=1, padx=10, pady=10)
+
+        ttk.Label(dialog, text="Color:").grid(row=5, column=0, padx=10, pady=10)
+        color_var = tk.StringVar(value="black")
+        ttk.Combobox(dialog, textvariable=color_var,
+                     values=['black', 'red', 'blue', 'green', 'orange', 'purple'],
+                     width=18).grid(row=5, column=1, padx=10, pady=10)
+
+        box_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(dialog, text="Show background box",
+                        variable=box_var).grid(row=6, column=0, columnspan=2, pady=10)
+
+        def add_text():
+            try:
+                x_pos = float(x_var.get())
+                y_pos = float(y_var.get())
+
+                bbox = None
+                if box_var.get():
+                    bbox = dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8)
+
+                ann_id = self.annotation_manager.add_data_annotation(
+                    'text',
+                    x_pos=x_pos,
+                    y_pos=y_pos,
+                    text=text_var.get(),
+                    fontsize=size_var.get(),
+                    color=color_var.get(),
+                    bbox=bbox
+                )
+                self.update_annotation_list()
+                self.refresh_plot()
+                dialog.destroy()
+            except ValueError:
+                messagebox.showerror("Error", "Please enter valid positions")
+
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.grid(row=7, column=0, columnspan=2, pady=20)
+
+        ttk.Button(btn_frame, text="Add", command=add_text).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Cancel", command=dialog.destroy).pack(side='left', padx=5)
+
+    def add_data_point_annotation(self):
+        """Add annotation at specific data point"""
+        try:
+            x_val = float(self.data_x_var.get())
+            y_val = float(self.data_y_var.get())
+            label = self.data_label_var.get()
+
+            ann_id = self.annotation_manager.add_data_point_annotation(
+                x_val, y_val, label,
+                color='red',
+                marker='o',
+                size=100,
+                show_arrow=True
+            )
+
+            self.update_annotation_list()
+            self.refresh_plot()
+
+            messagebox.showinfo("Success", f"Added data point annotation at ({x_val:.2f}, {y_val:.2e})")
+
+        except ValueError:
+            messagebox.showerror("Error", "Please enter valid numeric coordinates")
+
+    def add_data_arrow_annotation(self):
+        """Add arrow between data points"""
+        try:
+            x1 = float(self.arrow_x1_var.get())
+            y1 = float(self.arrow_y1_var.get())
+            x2 = float(self.arrow_x2_var.get())
+            y2 = float(self.arrow_y2_var.get())
+
+            ann_id = self.annotation_manager.add_data_arrow(
+                x1, y1, x2, y2,
+                label="",
+                color='black',
+                style='->',
+                width=2
+            )
+
+            self.update_annotation_list()
+            self.refresh_plot()
+
+            messagebox.showinfo("Success", "Added arrow annotation")
+
+        except ValueError:
+            messagebox.showerror("Error", "Please enter valid numeric coordinates")
+
+    def get_point_from_plot(self):
+        """Get coordinates from plot click (placeholder)"""
+        if self.ax:
+            x_min, x_max = self.ax.get_xlim()
+            y_min, y_max = self.ax.get_ylim()
+
+            # Set to center of plot as example
+            self.data_x_var.set(f"{(x_min + x_max) / 2:.2f}")
+            self.data_y_var.set(f"{(y_min + y_max) / 2:.2e}")
+
+            messagebox.showinfo("Info",
+                                "Set to plot center. In future versions, click on plot to select point.")
+        else:
+            messagebox.showwarning("Warning", "No plot available")
+
+    def add_process_regions_template(self):
+        """Add process region templates"""
+        if self.ax:
+            x_min, x_max = self.ax.get_xlim()
+            region_width = (x_max - x_min) / 4
+
+            regions = [
+                ("Pump-down", x_min, x_min + region_width, 'green', 0.2),
+                ("Process", x_min + region_width, x_min + 2 * region_width, 'blue', 0.2),
+                ("Venting", x_min + 2 * region_width, x_min + 3 * region_width, 'orange', 0.2),
+                ("Idle", x_min + 3 * region_width, x_max, 'gray', 0.1)
+            ]
+
+            for label, start, end, color, alpha in regions:
+                self.annotation_manager.add_data_annotation(
+                    'region',
+                    x_start=start,
+                    x_end=end,
+                    label=label,
+                    color=color,
+                    alpha=alpha
+                )
+
+            self.update_annotation_list()
+            self.refresh_plot()
+            messagebox.showinfo("Success", "Added process region templates")
+
+    def add_critical_points_template(self):
+        """Add critical point markers"""
+        if self.ax:
+            x_min, x_max = self.ax.get_xlim()
+            y_min, y_max = self.ax.get_ylim()
+
+            # Add some example critical points
+            points = [
+                ((x_max - x_min) * 0.2 + x_min, (y_max - y_min) * 0.8 + y_min, "Peak"),
+                ((x_max - x_min) * 0.5 + x_min, (y_max - y_min) * 0.2 + y_min, "Valley"),
+                ((x_max - x_min) * 0.8 + x_min, (y_max - y_min) * 0.5 + y_min, "Anomaly")
+            ]
+
+            for x, y, label in points:
+                self.annotation_manager.add_data_point_annotation(
+                    x, y, label,
+                    color='red',
+                    marker='^' if 'Peak' in label else 'v' if 'Valley' in label else 'D',
+                    size=150,
+                    show_arrow=True
+                )
+
+            self.update_annotation_list()
+            self.refresh_plot()
+            messagebox.showinfo("Success", "Added critical point markers")
 
     def update_annotation_list(self):
         """Update the annotation list display"""
@@ -2160,6 +3046,362 @@ class AnnotationDialog:
         """Cancel and close dialog"""
         self.dialog.destroy()
 
+
+class PlotConfigDialog:
+    """
+    Comprehensive plot configuration dialog
+    """
+
+    def __init__(self, parent, plot_config):
+        self.parent = parent
+        self.plot_config = plot_config.copy()  # Work with a copy
+        self.result = None
+
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("Plot Configuration")
+        self.dialog.geometry("800x600")
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+
+        self.create_widgets()
+        self.dialog.geometry("+%d+%d" % (parent.winfo_rootx() + 50, parent.winfo_rooty() + 50))
+
+    def create_widgets(self):
+        """Create configuration interface"""
+        # Create notebook for organized settings
+        notebook = ttk.Notebook(self.dialog)
+        notebook.pack(fill='both', expand=True, padx=10, pady=10)
+
+        # Create tabs
+        self.create_general_tab(notebook)
+        self.create_axes_tab(notebook)
+        self.create_style_tab(notebook)
+        self.create_data_tab(notebook)
+
+        # Buttons
+        btn_frame = ttk.Frame(self.dialog)
+        btn_frame.pack(fill='x', padx=10, pady=10)
+
+        ttk.Button(btn_frame, text="Apply", command=self.apply_config).pack(side='right', padx=5)
+        ttk.Button(btn_frame, text="Cancel", command=self.cancel).pack(side='right')
+        ttk.Button(btn_frame, text="Reset Defaults", command=self.reset_defaults).pack(side='left')
+
+    def create_general_tab(self, notebook):
+        """General plot settings"""
+        frame = ttk.Frame(notebook)
+        notebook.add(frame, text="General")
+
+        # Title settings
+        title_frame = ttk.LabelFrame(frame, text="Title", padding=10)
+        title_frame.pack(fill='x', padx=10, pady=10)
+
+        ttk.Label(title_frame, text="Title:").grid(row=0, column=0, sticky='w', padx=5, pady=5)
+        self.title_var = tk.StringVar(value=self.plot_config.get('title', ''))
+        ttk.Entry(title_frame, textvariable=self.title_var, width=50).grid(row=0, column=1, padx=5, pady=5)
+
+        ttk.Label(title_frame, text="Size:").grid(row=0, column=2, sticky='w', padx=5, pady=5)
+        self.title_size_var = tk.IntVar(value=self.plot_config.get('title_size', 16))
+        ttk.Spinbox(title_frame, from_=8, to=32, textvariable=self.title_size_var, width=10).grid(row=0, column=3,
+                                                                                                  padx=5, pady=5)
+
+        # Figure size
+        size_frame = ttk.LabelFrame(frame, text="Figure Size", padding=10)
+        size_frame.pack(fill='x', padx=10, pady=10)
+
+        ttk.Label(size_frame, text="Width:").grid(row=0, column=0, sticky='w', padx=5, pady=5)
+        self.fig_width_var = tk.DoubleVar(value=self.plot_config.get('fig_width', 14))
+        ttk.Spinbox(size_frame, from_=6, to=24, increment=0.5, textvariable=self.fig_width_var, width=10).grid(row=0,
+                                                                                                               column=1,
+                                                                                                               padx=5,
+                                                                                                               pady=5)
+
+        ttk.Label(size_frame, text="Height:").grid(row=0, column=2, sticky='w', padx=5, pady=5)
+        self.fig_height_var = tk.DoubleVar(value=self.plot_config.get('fig_height', 9))
+        ttk.Spinbox(size_frame, from_=4, to=16, increment=0.5, textvariable=self.fig_height_var, width=10).grid(row=0,
+                                                                                                                column=3,
+                                                                                                                padx=5,
+                                                                                                                pady=5)
+
+        ttk.Label(size_frame, text="DPI:").grid(row=1, column=0, sticky='w', padx=5, pady=5)
+        self.dpi_var = tk.IntVar(value=self.plot_config.get('dpi', 100))
+        ttk.Spinbox(size_frame, from_=50, to=300, increment=50, textvariable=self.dpi_var, width=10).grid(row=1,
+                                                                                                          column=1,
+                                                                                                          padx=5,
+                                                                                                          pady=5)
+
+    def create_axes_tab(self, notebook):
+        """Axes configuration"""
+        frame = ttk.Frame(notebook)
+        notebook.add(frame, text="Axes")
+
+        # X-axis
+        x_frame = ttk.LabelFrame(frame, text="X-Axis", padding=10)
+        x_frame.pack(fill='x', padx=10, pady=10)
+
+        ttk.Label(x_frame, text="Label:").grid(row=0, column=0, sticky='w', padx=5, pady=5)
+        self.xlabel_var = tk.StringVar(value=self.plot_config.get('xlabel', 'X Axis'))
+        ttk.Entry(x_frame, textvariable=self.xlabel_var, width=30).grid(row=0, column=1, padx=5, pady=5)
+
+        ttk.Label(x_frame, text="Size:").grid(row=0, column=2, sticky='w', padx=5, pady=5)
+        self.xlabel_size_var = tk.IntVar(value=self.plot_config.get('xlabel_size', 12))
+        ttk.Spinbox(x_frame, from_=8, to=24, textvariable=self.xlabel_size_var, width=10).grid(row=0, column=3, padx=5,
+                                                                                               pady=5)
+
+        self.log_x_var = tk.BooleanVar(value=self.plot_config.get('log_scale_x', False))
+        ttk.Checkbutton(x_frame, text="Logarithmic Scale", variable=self.log_x_var).grid(row=1, column=0, columnspan=2,
+                                                                                         sticky='w', padx=5, pady=5)
+
+        self.x_auto_var = tk.BooleanVar(value=self.plot_config.get('x_auto_scale', True))
+        ttk.Checkbutton(x_frame, text="Auto Scale", variable=self.x_auto_var,
+                        command=self.toggle_x_limits).grid(row=1, column=2, columnspan=2, sticky='w', padx=5, pady=5)
+
+        ttk.Label(x_frame, text="Min:").grid(row=2, column=0, sticky='w', padx=5, pady=5)
+        self.x_min_var = tk.StringVar(value=self.plot_config.get('x_min', ''))
+        self.x_min_entry = ttk.Entry(x_frame, textvariable=self.x_min_var, width=15)
+        self.x_min_entry.grid(row=2, column=1, sticky='w', padx=5, pady=5)
+
+        ttk.Label(x_frame, text="Max:").grid(row=2, column=2, sticky='w', padx=5, pady=5)
+        self.x_max_var = tk.StringVar(value=self.plot_config.get('x_max', ''))
+        self.x_max_entry = ttk.Entry(x_frame, textvariable=self.x_max_var, width=15)
+        self.x_max_entry.grid(row=2, column=3, sticky='w', padx=5, pady=5)
+
+        # Y-axis (similar structure)
+        y_frame = ttk.LabelFrame(frame, text="Y-Axis", padding=10)
+        y_frame.pack(fill='x', padx=10, pady=10)
+
+        ttk.Label(y_frame, text="Label:").grid(row=0, column=0, sticky='w', padx=5, pady=5)
+        self.ylabel_var = tk.StringVar(value=self.plot_config.get('ylabel', 'Y Axis'))
+        ttk.Entry(y_frame, textvariable=self.ylabel_var, width=30).grid(row=0, column=1, padx=5, pady=5)
+
+        ttk.Label(y_frame, text="Size:").grid(row=0, column=2, sticky='w', padx=5, pady=5)
+        self.ylabel_size_var = tk.IntVar(value=self.plot_config.get('ylabel_size', 12))
+        ttk.Spinbox(y_frame, from_=8, to=24, textvariable=self.ylabel_size_var, width=10).grid(row=0, column=3, padx=5,
+                                                                                               pady=5)
+
+        self.log_y_var = tk.BooleanVar(value=self.plot_config.get('log_scale_y', False))
+        ttk.Checkbutton(y_frame, text="Logarithmic Scale", variable=self.log_y_var).grid(row=1, column=0, columnspan=2,
+                                                                                         sticky='w', padx=5, pady=5)
+
+        self.y_auto_var = tk.BooleanVar(value=self.plot_config.get('y_auto_scale', True))
+        ttk.Checkbutton(y_frame, text="Auto Scale", variable=self.y_auto_var,
+                        command=self.toggle_y_limits).grid(row=1, column=2, columnspan=2, sticky='w', padx=5, pady=5)
+
+        ttk.Label(y_frame, text="Min:").grid(row=2, column=0, sticky='w', padx=5, pady=5)
+        self.y_min_var = tk.StringVar(value=self.plot_config.get('y_min', ''))
+        self.y_min_entry = ttk.Entry(y_frame, textvariable=self.y_min_var, width=15)
+        self.y_min_entry.grid(row=2, column=1, sticky='w', padx=5, pady=5)
+
+        ttk.Label(y_frame, text="Max:").grid(row=2, column=2, sticky='w', padx=5, pady=5)
+        self.y_max_var = tk.StringVar(value=self.plot_config.get('y_max', ''))
+        self.y_max_entry = ttk.Entry(y_frame, textvariable=self.y_max_var, width=15)
+        self.y_max_entry.grid(row=2, column=3, sticky='w', padx=5, pady=5)
+
+        self.toggle_x_limits()
+        self.toggle_y_limits()
+
+    def create_style_tab(self, notebook):
+        """Visual style settings"""
+        frame = ttk.Frame(notebook)
+        notebook.add(frame, text="Style")
+
+        # Grid settings
+        grid_frame = ttk.LabelFrame(frame, text="Grid", padding=10)
+        grid_frame.pack(fill='x', padx=10, pady=10)
+
+        self.show_grid_var = tk.BooleanVar(value=self.plot_config.get('show_grid', True))
+        ttk.Checkbutton(grid_frame, text="Show Grid", variable=self.show_grid_var).grid(row=0, column=0, sticky='w',
+                                                                                        padx=5, pady=5)
+
+        ttk.Label(grid_frame, text="Style:").grid(row=0, column=1, sticky='w', padx=5, pady=5)
+        self.grid_style_var = tk.StringVar(value=self.plot_config.get('grid_style', '-'))
+        ttk.Combobox(grid_frame, textvariable=self.grid_style_var,
+                     values=['-', '--', ':', '-.'], width=10).grid(row=0, column=2, padx=5, pady=5)
+
+        ttk.Label(grid_frame, text="Alpha:").grid(row=0, column=3, sticky='w', padx=5, pady=5)
+        self.grid_alpha_var = tk.DoubleVar(value=self.plot_config.get('grid_alpha', 0.3))
+        ttk.Scale(grid_frame, from_=0.1, to=1.0, variable=self.grid_alpha_var,
+                  orient='horizontal', length=150).grid(row=0, column=4, padx=5, pady=5)
+
+        # Legend
+        legend_frame = ttk.LabelFrame(frame, text="Legend", padding=10)
+        legend_frame.pack(fill='x', padx=10, pady=10)
+
+        self.show_legend_var = tk.BooleanVar(value=self.plot_config.get('show_legend', True))
+        ttk.Checkbutton(legend_frame, text="Show Legend", variable=self.show_legend_var).grid(row=0, column=0,
+                                                                                              sticky='w', padx=5,
+                                                                                              pady=5)
+
+        ttk.Label(legend_frame, text="Location:").grid(row=0, column=1, sticky='w', padx=5, pady=5)
+        self.legend_loc_var = tk.StringVar(value=self.plot_config.get('legend_location', 'best'))
+        ttk.Combobox(legend_frame, textvariable=self.legend_loc_var,
+                     values=['best', 'upper right', 'upper left', 'lower right', 'lower left', 'center'],
+                     width=15).grid(row=0, column=2, padx=5, pady=5)
+
+        # Margins
+        margin_frame = ttk.LabelFrame(frame, text="Margins", padding=10)
+        margin_frame.pack(fill='x', padx=10, pady=10)
+
+        margins = [('Left', 'margin_left'), ('Right', 'margin_right'),
+                   ('Top', 'margin_top'), ('Bottom', 'margin_bottom')]
+
+        for i, (label, key) in enumerate(margins):
+            ttk.Label(margin_frame, text=f"{label}:").grid(row=i // 2, column=(i % 2) * 2, sticky='w', padx=5, pady=5)
+            var = tk.DoubleVar(value=self.plot_config.get(key, 0.1))
+            setattr(self, f"{key}_var", var)
+            ttk.Scale(margin_frame, from_=0.02, to=0.3, variable=var,
+                      orient='horizontal', length=150).grid(row=i // 2, column=(i % 2) * 2 + 1, padx=5, pady=5)
+
+    def create_data_tab(self, notebook):
+        """Data handling settings"""
+        frame = ttk.Frame(notebook)
+        notebook.add(frame, text="Data")
+
+        # Problematic data handling
+        prob_frame = ttk.LabelFrame(frame, text="Problematic Data Detection", padding=10)
+        prob_frame.pack(fill='x', padx=10, pady=10)
+
+        self.detect_zeros_var = tk.BooleanVar(value=self.plot_config.get('detect_zeros', True))
+        ttk.Checkbutton(prob_frame, text="Highlight Zero Values",
+                        variable=self.detect_zeros_var).grid(row=0, column=0, sticky='w', padx=5, pady=5)
+
+        self.zero_color_var = tk.StringVar(value=self.plot_config.get('zero_color', 'red'))
+        ttk.Label(prob_frame, text="Zero Color:").grid(row=0, column=1, sticky='w', padx=5, pady=5)
+        ttk.Combobox(prob_frame, textvariable=self.zero_color_var,
+                     values=['red', 'orange', 'yellow', 'purple'], width=10).grid(row=0, column=2, padx=5, pady=5)
+
+        self.detect_outliers_var = tk.BooleanVar(value=self.plot_config.get('detect_outliers', True))
+        ttk.Checkbutton(prob_frame, text="Highlight Outliers",
+                        variable=self.detect_outliers_var).grid(row=1, column=0, sticky='w', padx=5, pady=5)
+
+        self.outlier_threshold_var = tk.DoubleVar(value=self.plot_config.get('outlier_threshold', 3.0))
+        ttk.Label(prob_frame, text="Outlier Threshold (σ):").grid(row=1, column=1, sticky='w', padx=5, pady=5)
+        ttk.Spinbox(prob_frame, from_=1, to=10, increment=0.5,
+                    textvariable=self.outlier_threshold_var, width=10).grid(row=1, column=2, padx=5, pady=5)
+
+        self.detect_gaps_var = tk.BooleanVar(value=self.plot_config.get('detect_gaps', True))
+        ttk.Checkbutton(prob_frame, text="Highlight Data Gaps",
+                        variable=self.detect_gaps_var).grid(row=2, column=0, sticky='w', padx=5, pady=5)
+
+        # Missing data handling
+        missing_frame = ttk.LabelFrame(frame, text="Missing Data Handling", padding=10)
+        missing_frame.pack(fill='x', padx=10, pady=10)
+
+        ttk.Label(missing_frame, text="Method:").grid(row=0, column=0, sticky='w', padx=5, pady=5)
+        self.missing_method_var = tk.StringVar(value=self.plot_config.get('missing_method', 'interpolate'))
+        ttk.Combobox(missing_frame, textvariable=self.missing_method_var,
+                     values=['interpolate', 'drop', 'fill_zero', 'forward_fill'],
+                     width=15).grid(row=0, column=1, padx=5, pady=5)
+
+        self.highlight_missing_var = tk.BooleanVar(value=self.plot_config.get('highlight_missing', True))
+        ttk.Checkbutton(missing_frame, text="Highlight Missing Data",
+                        variable=self.highlight_missing_var).grid(row=1, column=0, sticky='w', padx=5, pady=5)
+
+        self.missing_color_var = tk.StringVar(value=self.plot_config.get('missing_color', 'gray'))
+        ttk.Label(missing_frame, text="Missing Data Color:").grid(row=1, column=1, sticky='w', padx=5, pady=5)
+        ttk.Combobox(missing_frame, textvariable=self.missing_color_var,
+                     values=['gray', 'red', 'orange', 'purple'], width=10).grid(row=1, column=2, padx=5, pady=5)
+
+    def toggle_x_limits(self):
+        """Enable/disable X limit entries"""
+        state = 'disabled' if self.x_auto_var.get() else 'normal'
+        self.x_min_entry.config(state=state)
+        self.x_max_entry.config(state=state)
+
+    def toggle_y_limits(self):
+        """Enable/disable Y limit entries"""
+        state = 'disabled' if self.y_auto_var.get() else 'normal'
+        self.y_min_entry.config(state=state)
+        self.y_max_entry.config(state=state)
+
+    def reset_defaults(self):
+        """Reset to default configuration"""
+        if messagebox.askyesno("Confirm", "Reset all settings to defaults?"):
+            # Reset all variables to defaults
+            self.title_var.set("Multi-File Data Analysis")
+            self.title_size_var.set(16)
+            self.fig_width_var.set(14)
+            self.fig_height_var.set(9)
+            self.dpi_var.set(100)
+
+            self.xlabel_var.set("X Axis")
+            self.xlabel_size_var.set(12)
+            self.ylabel_var.set("Y Axis")
+            self.ylabel_size_var.set(12)
+
+            self.log_x_var.set(False)
+            self.log_y_var.set(False)
+            self.x_auto_var.set(True)
+            self.y_auto_var.set(True)
+
+            self.show_grid_var.set(True)
+            self.grid_style_var.set('-')
+            self.grid_alpha_var.set(0.3)
+            self.show_legend_var.set(True)
+            self.legend_loc_var.set('best')
+
+            self.detect_zeros_var.set(True)
+            self.detect_outliers_var.set(True)
+            self.detect_gaps_var.set(True)
+
+            self.toggle_x_limits()
+            self.toggle_y_limits()
+
+    def apply_config(self):
+        """Apply configuration changes"""
+        # Gather all settings
+        self.plot_config = {
+            'title': self.title_var.get(),
+            'title_size': self.title_size_var.get(),
+            'fig_width': self.fig_width_var.get(),
+            'fig_height': self.fig_height_var.get(),
+            'dpi': self.dpi_var.get(),
+
+            'xlabel': self.xlabel_var.get(),
+            'xlabel_size': self.xlabel_size_var.get(),
+            'ylabel': self.ylabel_var.get(),
+            'ylabel_size': self.ylabel_size_var.get(),
+
+            'log_scale_x': self.log_x_var.get(),
+            'log_scale_y': self.log_y_var.get(),
+            'x_auto_scale': self.x_auto_var.get(),
+            'y_auto_scale': self.y_auto_var.get(),
+
+            'show_grid': self.show_grid_var.get(),
+            'grid_style': self.grid_style_var.get(),
+            'grid_alpha': self.grid_alpha_var.get(),
+            'show_legend': self.show_legend_var.get(),
+            'legend_location': self.legend_loc_var.get(),
+
+            'margin_left': self.margin_left_var.get(),
+            'margin_right': self.margin_right_var.get(),
+            'margin_top': self.margin_top_var.get(),
+            'margin_bottom': self.margin_bottom_var.get(),
+
+            'detect_zeros': self.detect_zeros_var.get(),
+            'zero_color': self.zero_color_var.get(),
+            'detect_outliers': self.detect_outliers_var.get(),
+            'outlier_threshold': self.outlier_threshold_var.get(),
+            'detect_gaps': self.detect_gaps_var.get(),
+            'missing_method': self.missing_method_var.get(),
+            'highlight_missing': self.highlight_missing_var.get(),
+            'missing_color': self.missing_color_var.get()
+        }
+
+        if not self.x_auto_var.get():
+            self.plot_config['x_min'] = self.x_min_var.get()
+            self.plot_config['x_max'] = self.x_max_var.get()
+
+        if not self.y_auto_var.get():
+            self.plot_config['y_min'] = self.y_min_var.get()
+            self.plot_config['y_max'] = self.y_max_var.get()
+
+        self.result = 'apply'
+        self.dialog.destroy()
+
+    def cancel(self):
+        """Cancel without applying changes"""
+        self.result = 'cancel'
+        self.dialog.destroy()
 
 class DataSelectorDialog:
     """

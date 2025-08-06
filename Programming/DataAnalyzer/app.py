@@ -35,7 +35,7 @@ from utils import (format_file_size, validate_data_range, detect_datetime_column
 
 # Import dialogs (will be defined in dialogs.py)
 from dialogs import (SeriesConfigDialog, VacuumAnalysisDialog, AnnotationDialog,
-                     DataSelectorDialog)
+                     DataSelectorDialog, PlotConfigDialog)
 
 # Get logger
 logger = logging.getLogger(__name__)
@@ -171,18 +171,82 @@ class ExcelDataPlotter(ctk.CTk):
         self.top_bar.add_action("Export", "📤", self.show_export_dialog, "Export plot or data", side="right")
         self.top_bar.add_separator(side="right")
 
-        # Analysis actions (center)
-        self.top_bar.add_action("Analysis", "🔬", self.show_analysis_panel, "Data analysis tools", side="center")
+        # Analysis actions (center) - FIXED
+        self.top_bar.add_action("Analysis", "🔬", self.show_statistical_analysis, "Statistical analysis tools",
+                                side="center")
         self.top_bar.add_action("Vacuum Tools", "🎯", self.show_vacuum_analysis, "Vacuum analysis tools", side="center")
         self.top_bar.add_action("Annotations", "📍", self.show_annotation_panel, "Manage annotations", side="center")
         self.top_bar.add_separator(side="center")
 
-        # View actions (center)
+        # View actions (center) - FIXED
         self.top_bar.add_action("Theme", "🎨", self.toggle_theme, "Toggle dark/light theme", side="center")
-        self.top_bar.add_action("Layout", "📐", self.cycle_layout, "Change layout mode", side="center")
+        self.top_bar.add_action("Configure", "📐", self.show_plot_config, "Configure plot settings", side="center")
 
         logger.debug("Top action bar created")
 
+    def show_plot_config(self):
+        """Show plot configuration dialog"""
+        config = {
+            'title': self.title_var.get(),
+            'title_size': self.title_size_var.get(),
+            'xlabel': self.xlabel_var.get(),
+            'xlabel_size': self.xlabel_size_var.get(),
+            'ylabel': self.ylabel_var.get(),
+            'ylabel_size': self.ylabel_size_var.get(),
+            'log_scale_x': self.log_scale_x_var.get(),
+            'log_scale_y': self.log_scale_y_var.get(),
+            'show_grid': self.show_grid_var.get(),
+            'show_legend': self.show_legend_var.get(),
+            'grid_style': self.grid_style_var.get(),
+            'grid_alpha': self.grid_alpha_var.get(),
+            'fig_width': self.fig_width_var.get(),
+            'fig_height': self.fig_height_var.get()
+        }
+
+        dialog = PlotConfigDialog(self, config)
+        self.wait_window(dialog.dialog)
+
+        if dialog.result == 'apply':
+            # Apply configuration
+            self.title_var.set(dialog.plot_config['title'])
+            self.title_size_var.set(dialog.plot_config['title_size'])
+            self.xlabel_var.set(dialog.plot_config['xlabel'])
+            self.xlabel_size_var.set(dialog.plot_config['xlabel_size'])
+            self.ylabel_var.set(dialog.plot_config['ylabel'])
+            self.ylabel_size_var.set(dialog.plot_config['ylabel_size'])
+            self.log_scale_x_var.set(dialog.plot_config['log_scale_x'])
+            self.log_scale_y_var.set(dialog.plot_config['log_scale_y'])
+            self.show_grid_var.set(dialog.plot_config['show_grid'])
+            self.show_legend_var.set(dialog.plot_config['show_legend'])
+            self.grid_style_var.set(dialog.plot_config['grid_style'])
+            self.grid_alpha_var.set(dialog.plot_config['grid_alpha'])
+            self.fig_width_var.set(dialog.plot_config['fig_width'])
+            self.fig_height_var.set(dialog.plot_config['fig_height'])
+
+            # Store additional config
+            self.plot_config_extra = dialog.plot_config
+
+            # Refresh plot if exists
+            if self.figure:
+                self.create_plot()
+
+            self.status_bar.set_status("Plot configuration updated", "success")
+
+    def show_statistical_analysis(self):
+        """Show generic statistical analysis dialog"""
+        if self.all_series:
+            # Create a simplified statistical analysis dialog
+            # You can implement this as needed
+            messagebox.showinfo("Statistical Analysis",
+                                "Statistical analysis tools will be available here.\n" +
+                                "Features: correlation, regression, distribution analysis, etc.")
+        else:
+            self.status_bar.set_status("No series available for analysis", "warning")
+
+    def refresh_plot(self):
+        """Refresh the plot with current settings"""
+        if self.figure:
+            self.create_plot()
     def create_main_content(self):
         """Create the main content area with adaptive layout"""
         self.content_frame = ctk.CTkFrame(self.main_container)
@@ -307,18 +371,35 @@ class ExcelDataPlotter(ctk.CTk):
                                               command=lambda x: self.update_series_range_limits())
         self.series_y_combo.grid(row=1, column=3, sticky="ew", padx=5, pady=5)
 
-        # Range selection
-        ctk.CTkLabel(content, text="Start:").grid(row=2, column=0, sticky="w", padx=5, pady=5)
-        self.series_start_entry = ctk.CTkEntry(content, textvariable=self.series_start_var, width=80)
-        self.series_start_entry.grid(row=2, column=1, sticky="w", padx=5, pady=5)
+        # Range selection with data preview
+        range_frame = ttk.Frame(content)
+        range_frame.grid(row=2, column=0, columnspan=4, sticky='ew', pady=10)
 
-        ctk.CTkLabel(content, text="End:").grid(row=2, column=2, sticky="w", padx=5, pady=5)
-        self.series_end_entry = ctk.CTkEntry(content, textvariable=self.series_end_var, width=80)
-        self.series_end_entry.grid(row=2, column=3, sticky="w", padx=5, pady=5)
+        ttk.Label(range_frame, text="Data Range:").grid(row=0, column=0, sticky='w', padx=5, pady=5)
 
-        # Range info label
-        self.range_info_label = ctk.CTkLabel(content, text="", text_color=("gray60", "gray40"))
-        self.range_info_label.grid(row=3, column=0, columnspan=4, pady=5)
+        # Start selection
+        self.series_start_frame = ttk.Frame(range_frame)
+        self.series_start_frame.grid(row=1, column=0, columnspan=2, sticky='w', padx=5, pady=5)
+
+        ttk.Label(self.series_start_frame, text="Start:").pack(side='left')
+        self.series_start_entry = ctk.CTkEntry(self.series_start_frame, textvariable=self.series_start_var, width=80)
+        self.series_start_entry.pack(side='left', padx=5)
+        self.series_start_label = ttk.Label(self.series_start_frame, text="", foreground='gray')
+        self.series_start_label.pack(side='left', padx=5)
+
+        # End selection
+        self.series_end_frame = ttk.Frame(range_frame)
+        self.series_end_frame.grid(row=1, column=2, columnspan=2, sticky='w', padx=5, pady=5)
+
+        ttk.Label(self.series_end_frame, text="End:").pack(side='left')
+        self.series_end_entry = ctk.CTkEntry(self.series_end_frame, textvariable=self.series_end_var, width=80)
+        self.series_end_entry.pack(side='left', padx=5)
+        self.series_end_label = ttk.Label(self.series_end_frame, text="", foreground='gray')
+        self.series_end_label.pack(side='left', padx=5)
+
+        # Bind change events to update labels
+        self.series_start_var.trace('w', self.update_range_labels)
+        self.series_end_var.trace('w', self.update_range_labels)
 
         # Series name
         ctk.CTkLabel(content, text="Name:").grid(row=4, column=0, sticky="w", padx=5, pady=5)
@@ -345,6 +426,39 @@ class ExcelDataPlotter(ctk.CTk):
         # Update series display
         self.update_series_display()
 
+    def update_range_labels(self, *args):
+        """Update range labels with actual data values"""
+        selection = self.series_file_var.get()
+        if not selection:
+            return
+
+        try:
+            file_id = selection.split('(')[-1].rstrip(')')
+            matching_file = None
+            for fid, fdata in self.loaded_files.items():
+                if fid.startswith(file_id):
+                    matching_file = fdata
+                    break
+
+            if matching_file and self.series_x_var.get():
+                x_col = self.series_x_var.get()
+                start_idx = self.series_start_var.get()
+                end_idx = self.series_end_var.get()
+
+                if x_col != 'Index' and x_col in matching_file.df.columns:
+                    # Show actual data values
+                    if 0 <= start_idx < len(matching_file.df):
+                        start_val = matching_file.df.iloc[start_idx][x_col]
+                        self.series_start_label.config(text=f"({start_val})")
+
+                    if 0 < end_idx <= len(matching_file.df):
+                        end_val = matching_file.df.iloc[end_idx - 1][x_col]
+                        self.series_end_label.config(text=f"({end_val})")
+                else:
+                    self.series_start_label.config(text="")
+                    self.series_end_label.config(text="")
+        except:
+            pass
     def create_config_panel(self):
         """Create the configuration panel with professional features"""
         # Plot configuration sections
@@ -1124,7 +1238,7 @@ class ExcelDataPlotter(ctk.CTk):
             traceback.print_exc()
 
     def plot_single_series(self, ax, series, file_data, plot_type):
-        """Plot a single data series with professional features"""
+        """Plot a single data series with enhanced problematic data handling"""
         start_idx = max(0, series.start_index)
         end_idx = min(len(file_data.df), series.end_index or len(file_data.df))
 
@@ -1133,6 +1247,7 @@ class ExcelDataPlotter(ctk.CTk):
 
         data_slice = file_data.df.iloc[start_idx:end_idx].copy()
 
+        # Get X data
         if series.x_column == 'Index':
             x_data = np.arange(start_idx, end_idx)
             x_label = "Index"
@@ -1142,10 +1257,19 @@ class ExcelDataPlotter(ctk.CTk):
             if detect_datetime_column(x_data):
                 x_data = convert_to_datetime(x_data)
 
+        # Get Y data
         y_data = data_slice[series.y_column].copy()
 
+        # Detect and handle problematic data
+        problematic_mask, problem_types = self.detect_problematic_data(y_data, series)
+
+        # Store original data for problem highlighting
+        y_original = y_data.copy()
+
+        # Handle missing/problematic data
         y_data = self.handle_missing_data(y_data, series.missing_data_method)
 
+        # Filter valid data
         if isinstance(x_data, pd.Series):
             valid_mask = ~(x_data.isna() | y_data.isna())
             x_plot = x_data[valid_mask]
@@ -1159,17 +1283,22 @@ class ExcelDataPlotter(ctk.CTk):
         if len(x_plot) == 0:
             return
 
+        # Apply smoothing if requested
         if series.smooth_factor > 0 and len(y_plot) > 5:
             window_size = max(5, int(len(y_plot) * series.smooth_factor / 100))
             if window_size % 2 == 0:
                 window_size += 1
             try:
-                y_plot = savgol_filter(y_plot, window_size, 3)
+                y_plot_smooth = savgol_filter(y_plot, window_size, 3)
             except:
-                pass
+                y_plot_smooth = y_plot
+        else:
+            y_plot_smooth = y_plot
 
+        # Main plot
         if plot_type == 'line':
-            line = ax.plot(x_plot, y_plot,
+            # Plot normal data
+            line = ax.plot(x_plot, y_plot_smooth,
                            color=series.color,
                            linestyle=series.line_style,
                            linewidth=series.line_width,
@@ -1179,53 +1308,173 @@ class ExcelDataPlotter(ctk.CTk):
                            label=series.legend_label if series.show_in_legend else "")
 
             if series.fill_area:
-                ax.fill_between(x_plot, y_plot, alpha=series.alpha * 0.3, color=series.color)
+                ax.fill_between(x_plot, y_plot_smooth, alpha=series.alpha * 0.3, color=series.color)
 
         elif plot_type == 'scatter':
-            ax.scatter(x_plot, y_plot,
+            ax.scatter(x_plot, y_plot_smooth,
                        color=series.color,
                        s=series.marker_size ** 2,
                        marker=series.marker if series.marker else 'o',
                        alpha=series.alpha,
                        label=series.legend_label if series.show_in_legend else "")
 
-        elif plot_type == 'bar':
-            ax.bar(x_plot, y_plot,
-                   color=series.color,
-                   alpha=series.alpha,
-                   label=series.legend_label if series.show_in_legend else "")
+        # Highlight problematic data if configured
+        if hasattr(self, 'plot_config_extra') and self.plot_config_extra:
+            self.highlight_problematic_data(ax, x_data, y_original, problematic_mask, problem_types, series)
 
-        elif plot_type == 'area':
-            ax.fill_between(x_plot, y_plot,
-                            color=series.color,
-                            alpha=series.alpha,
-                            label=series.legend_label if series.show_in_legend else "")
-
+        # Add analysis features
         if series.show_trendline and plot_type in ['scatter', 'line']:
             self.add_trendline(ax, x_plot, y_plot, series)
 
         if series.show_peaks:
-            self.mark_peaks(ax, x_plot, y_plot, series)
+            self.mark_peaks(ax, x_plot, y_plot_smooth, series)
 
         if series.show_statistics:
             self.add_statistics_box(ax, y_plot, series)
 
         if series.highlight_base_pressure:
-            base_pressure, _, _ = VacuumAnalysisTools.calculate_base_pressure(y_plot)
+            base_pressure, _, _ = VacuumAnalysisTools.calculate_base_pressure(y_plot_smooth)
             ax.axhline(y=base_pressure, color='green', linestyle='--', alpha=0.5,
                        label=f'Base: {base_pressure:.2e}')
 
         if series.highlight_spikes:
-            spikes = VacuumAnalysisTools.detect_pressure_spikes(y_plot)
+            spikes = VacuumAnalysisTools.detect_pressure_spikes(y_plot_smooth)
             for spike in spikes:
                 if spike['severity'] == 'high':
                     ax.axvspan(x_plot.iloc[spike['start']], x_plot.iloc[spike['end']],
                                color='red', alpha=0.2)
 
+        # Format datetime axis if needed
         if pd.api.types.is_datetime64_any_dtype(x_data):
             ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d %H:%M'))
             ax.xaxis.set_major_locator(mdates.AutoDateLocator())
             self.figure.autofmt_xdate()
+
+    def detect_problematic_data(self, y_data, series):
+        """
+        Detect various types of problematic data
+
+        Returns:
+            tuple: (problematic_mask, problem_types)
+        """
+        problematic_mask = np.zeros(len(y_data), dtype=bool)
+        problem_types = []
+
+        # Get config
+        config = getattr(self, 'plot_config_extra', {})
+
+        # Detect zeros
+        if config.get('detect_zeros', True):
+            zero_mask = (y_data == 0) | (y_data <= 1e-10)  # Consider very small values as zeros
+            if zero_mask.any():
+                problematic_mask |= zero_mask
+                problem_types.append(('zeros', zero_mask))
+
+        # Detect outliers
+        if config.get('detect_outliers', True):
+            threshold = config.get('outlier_threshold', 3.0)
+            mean = np.nanmean(y_data)
+            std = np.nanstd(y_data)
+            outlier_mask = np.abs(y_data - mean) > threshold * std
+            if outlier_mask.any():
+                problematic_mask |= outlier_mask
+                problem_types.append(('outliers', outlier_mask))
+
+        # Detect sudden jumps/drops
+        if config.get('detect_gaps', True):
+            # Calculate differences
+            diff = np.abs(np.diff(y_data))
+            median_diff = np.nanmedian(diff)
+            if median_diff > 0:
+                jump_threshold = 10 * median_diff
+                jump_mask = np.zeros(len(y_data), dtype=bool)
+                jump_indices = np.where(diff > jump_threshold)[0]
+                for idx in jump_indices:
+                    if idx < len(jump_mask) - 1:
+                        jump_mask[idx:idx + 2] = True
+                if jump_mask.any():
+                    problematic_mask |= jump_mask
+                    problem_types.append(('jumps', jump_mask))
+
+        # Detect NaN/missing values
+        nan_mask = pd.isna(y_data)
+        if nan_mask.any():
+            problematic_mask |= nan_mask
+            problem_types.append(('missing', nan_mask))
+
+        return problematic_mask, problem_types
+
+    def highlight_problematic_data(self, ax, x_data, y_data, problematic_mask, problem_types, series):
+        """Highlight problematic data points on the plot"""
+        config = getattr(self, 'plot_config_extra', {})
+
+        # Convert to arrays for indexing
+        x_array = np.array(x_data)
+        y_array = np.array(y_data)
+
+        for problem_type, mask in problem_types:
+            if not mask.any():
+                continue
+
+            # Get indices where problem occurs
+            problem_indices = np.where(mask)[0]
+
+            if problem_type == 'zeros' and config.get('detect_zeros', True):
+                # Highlight zero values
+                color = config.get('zero_color', 'red')
+                for idx in problem_indices:
+                    if idx < len(x_array) and idx < len(y_array):
+                        ax.scatter(x_array[idx], y_array[idx],
+                                   color=color, s=100, marker='x',
+                                   linewidths=3, zorder=10, alpha=0.8)
+
+                # Add to legend
+                ax.scatter([], [], color=color, marker='x', s=100,
+                           linewidths=3, label=f'{series.name}: Zero/Invalid')
+
+            elif problem_type == 'outliers' and config.get('detect_outliers', True):
+                # Highlight outliers
+                for idx in problem_indices:
+                    if idx < len(x_array) and idx < len(y_array):
+                        ax.scatter(x_array[idx], y_array[idx],
+                                   color='orange', s=150, marker='D',
+                                   edgecolors='red', linewidths=2,
+                                   zorder=10, alpha=0.7)
+
+                ax.scatter([], [], color='orange', marker='D', s=150,
+                           edgecolors='red', linewidths=2,
+                           label=f'{series.name}: Outliers')
+
+            elif problem_type == 'jumps' and config.get('detect_gaps', True):
+                # Highlight data jumps/gaps
+                for idx in problem_indices:
+                    if idx < len(x_array) - 1:
+                        ax.plot([x_array[idx], x_array[idx + 1]],
+                                [y_array[idx], y_array[idx + 1]],
+                                'r--', linewidth=2, alpha=0.5)
+
+            elif problem_type == 'missing' and config.get('highlight_missing', True):
+                # Mark missing data regions
+                color = config.get('missing_color', 'gray')
+                # Group consecutive missing values
+                groups = []
+                current_group = []
+                for idx in problem_indices:
+                    if not current_group or idx == current_group[-1] + 1:
+                        current_group.append(idx)
+                    else:
+                        groups.append(current_group)
+                        current_group = [idx]
+                if current_group:
+                    groups.append(current_group)
+
+                # Shade missing data regions
+                for group in groups:
+                    if len(group) > 1:
+                        start_idx = max(0, group[0] - 1)
+                        end_idx = min(len(x_array) - 1, group[-1] + 1)
+                        ax.axvspan(x_array[start_idx], x_array[end_idx],
+                                   color=color, alpha=0.2, label='Missing Data')
 
     def handle_missing_data(self, y_data, method):
         """Handle missing data according to specified method"""

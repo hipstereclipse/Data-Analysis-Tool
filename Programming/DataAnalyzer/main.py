@@ -11,6 +11,11 @@ import traceback  # For error reporting
 import logging  # For logging system
 from datetime import datetime  # For timestamps
 
+# Set console encoding to UTF-8 on Windows
+if os.name == 'nt':  # Windows
+    import codecs
+    sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'strict')
+    sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer, 'strict')
 
 # Configure logging before importing other modules
 def setup_logging():

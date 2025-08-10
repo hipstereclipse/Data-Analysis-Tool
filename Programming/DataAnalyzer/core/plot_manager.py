@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Plot Manager for Excel Data Plotter
+Plot Manager - Unified plotting operations
+Consolidated from plot_manager.py and enhanced_plot_manager.py
 Handles all plotting operations including series rendering and styling
 """
 
@@ -10,28 +11,26 @@ import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 import matplotlib.dates as mdates
-from scipy.signal import savgol_filter
-from scipy import stats
-from sklearn.linear_model import LinearRegression
 import logging
 from typing import Dict, List, Optional, Tuple, Any
 
 from config.constants import PlotTypes, MissingDataMethods, TrendTypes
 from models.data_models import SeriesConfig, PlotConfiguration, FileData
+from core.data_utils import DataProcessor, DataValidator
 
 logger = logging.getLogger(__name__)
 
 
 class PlotManager:
     """
-    Manages plot creation, updating, and configuration
+    Unified plot manager with multi-series support and advanced styling
     Handles all matplotlib operations for the application
     """
 
-    def __init__(self):
+    def __init__(self, figure: Optional[Figure] = None):
         """Initialize plot manager"""
         # Current figure and axes
-        self.figure: Optional[Figure] = None
+        self.figure: Optional[Figure] = figure
         self.axes: Optional[plt.Axes] = None
         self.canvas: Optional[FigureCanvasTkAgg] = None
         self.toolbar: Optional[NavigationToolbar2Tk] = None
@@ -44,10 +43,374 @@ class PlotManager:
 
         # Track plotted series for updates
         self.plotted_series: Dict[str, Any] = {}
+        self.series_configs: Dict[str, SeriesConfig] = {}
+        self.loaded_files: Dict[str, FileData] = {}
 
         # Color cycle
         self.color_cycle = plt.cm.get_cmap('tab10')
         self.color_index = 0
+        
+        # Plot settings
+        self.auto_scale = True
+        self.show_grid = True
+        self.show_legend = True
+        self.legend_location = "best"
+
+        # Initialize figure if provided
+        if self.figure:
+            self.setup_figure()
+
+    def setup_figure(self):
+        """Setup the figure with proper configuration"""
+        if self.figure:
+            self.figure.clear()
+            self.axes = self.figure.add_subplot(111)
+            
+            # Apply default styling
+            self.axes.set_xlabel("X-Axis")
+            self.axes.set_ylabel("Y-Axis")
+            self.axes.grid(self.show_grid, alpha=0.3)
+
+    def set_figure(self, figure: Figure):
+        """Set the figure to be managed"""
+        self.figure = figure
+        self.setup_figure()
+
+    def add_series(self, series_id: str, series_config: SeriesConfig, file_data: FileData):
+        """Add a series to the plot"""
+        try:
+            # Store references
+            self.series_configs[series_id] = series_config
+            self.loaded_files[series_config.file_id] = file_data
+            
+            # Get data
+            x_data, y_data = self._get_series_data(series_config, file_data)
+            
+            # Validate data
+            is_valid, error_msg = DataValidator.validate_data_compatibility(x_data, y_data)
+            if not is_valid:
+                logger.error(f"Invalid data for series {series_id}: {error_msg}")
+                return False
+            
+            # Apply processing
+            x_data, y_data = self._process_series_data(x_data, y_data, series_config)
+            
+            # Plot the series
+            plot_objects = self._plot_series(x_data, y_data, series_config)
+            
+            # Store plot objects for updates
+            self.plotted_series[series_id] = {
+                'config': series_config,
+                'file_data': file_data,
+                'plot_objects': plot_objects,
+                'x_data': x_data,
+                'y_data': y_data
+            }
+            
+            # Update plot
+            self._update_plot_appearance()
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error adding series {series_id}: {e}")
+            return False
+
+    def remove_series(self, series_id: str):
+        """Remove a series from the plot"""
+        try:
+            if series_id in self.plotted_series:
+                # Remove plot objects
+                plot_objects = self.plotted_series[series_id]['plot_objects']
+                for obj in plot_objects:
+                    if obj in self.axes.lines:
+                        obj.remove()
+                    elif hasattr(obj, 'remove'):
+                        obj.remove()
+                
+                # Remove from tracking
+                del self.plotted_series[series_id]
+                if series_id in self.series_configs:
+                    del self.series_configs[series_id]
+                
+                # Update plot
+                self._update_plot_appearance()
+                
+                return True
+                
+        except Exception as e:
+            logger.error(f"Error removing series {series_id}: {e}")
+            return False
+
+    def update_series(self, series_id: str, series_config: SeriesConfig):
+        """Update an existing series"""
+        try:
+            if series_id in self.plotted_series:
+                # Remove old series
+                self.remove_series(series_id)
+                
+                # Add updated series
+                file_data = self.plotted_series.get(series_id, {}).get('file_data')
+                if file_data:
+                    return self.add_series(series_id, series_config, file_data)
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error updating series {series_id}: {e}")
+            return False
+
+    def clear_plot(self):
+        """Clear all series from the plot"""
+        try:
+            if self.axes:
+                self.axes.clear()
+                self.plotted_series.clear()
+                self.series_configs.clear()
+                self.setup_figure()
+                
+        except Exception as e:
+            logger.error(f"Error clearing plot: {e}")
+
+    def refresh_plot(self):
+        """Refresh the entire plot"""
+        try:
+            if not self.axes:
+                return
+                
+            # Store current series
+            current_series = self.plotted_series.copy()
+            
+            # Clear and rebuild
+            self.axes.clear()
+            self.setup_figure()
+            self.plotted_series.clear()
+            
+            # Re-add all series
+            for series_id, series_data in current_series.items():
+                self.add_series(
+                    series_id,
+                    series_data['config'],
+                    series_data['file_data']
+                )
+                
+        except Exception as e:
+            logger.error(f"Error refreshing plot: {e}")
+
+    def _get_series_data(self, series_config: SeriesConfig, file_data: FileData) -> Tuple[np.ndarray, np.ndarray]:
+        """Get data arrays for a series"""
+        try:
+            # Get data slice
+            start_idx = series_config.start_index or 0
+            end_idx = series_config.end_index or len(file_data.data)
+            data_slice = file_data.data.iloc[start_idx:end_idx]
+            
+            # Get X data
+            if series_config.x_column == "Index":
+                x_data = np.arange(len(data_slice))
+            else:
+                x_data = data_slice[series_config.x_column].values
+                if pd.api.types.is_object_dtype(x_data):
+                    x_data = pd.to_numeric(x_data, errors='coerce')
+                    
+            # Get Y data
+            y_data = data_slice[series_config.y_column].values
+            if pd.api.types.is_object_dtype(y_data):
+                y_data = pd.to_numeric(y_data, errors='coerce')
+                
+            return x_data, y_data
+            
+        except Exception as e:
+            logger.error(f"Error getting series data: {e}")
+            return np.array([]), np.array([])
+
+    def _process_series_data(self, x_data: np.ndarray, y_data: np.ndarray, 
+                           series_config: SeriesConfig) -> Tuple[np.ndarray, np.ndarray]:
+        """Apply data processing to series"""
+        try:
+            # Handle missing data
+            missing_method = getattr(series_config, 'missing_data_method', 'drop')
+            x_data, y_data = DataProcessor.handle_missing_data(x_data, y_data, missing_method)
+            
+            # Apply smoothing
+            if getattr(series_config, 'smoothing', False):
+                window = getattr(series_config, 'smoothing_window', 5)
+                y_data = DataProcessor.apply_smoothing(y_data, window)
+            
+            return x_data, y_data
+            
+        except Exception as e:
+            logger.error(f"Error processing series data: {e}")
+            return x_data, y_data
+
+    def _plot_series(self, x_data: np.ndarray, y_data: np.ndarray, 
+                    series_config: SeriesConfig) -> List[Any]:
+        """Plot a series and return plot objects"""
+        plot_objects = []
+        
+        try:
+            plot_type = series_config.plot_type or "line"
+            color = series_config.color or self._get_next_color()
+            label = series_config.name if self.show_legend else ""
+            
+            if plot_type == "line":
+                line = self.axes.plot(
+                    x_data, y_data,
+                    color=color,
+                    linestyle=series_config.line_style or "-",
+                    linewidth=series_config.line_width or 1.0,
+                    alpha=series_config.alpha or 1.0,
+                    label=label
+                )[0]
+                plot_objects.append(line)
+                
+            elif plot_type == "scatter":
+                scatter = self.axes.scatter(
+                    x_data, y_data,
+                    color=color,
+                    marker=series_config.marker or "o",
+                    s=(series_config.marker_size or 6.0) ** 2,
+                    alpha=series_config.alpha or 1.0,
+                    label=label
+                )
+                plot_objects.append(scatter)
+                
+            elif plot_type == "both":
+                line = self.axes.plot(
+                    x_data, y_data,
+                    color=color,
+                    linestyle=series_config.line_style or "-",
+                    linewidth=series_config.line_width or 1.0,
+                    marker=series_config.marker or "o",
+                    markersize=series_config.marker_size or 6.0,
+                    alpha=series_config.alpha or 1.0,
+                    label=label
+                )[0]
+                plot_objects.append(line)
+                
+            elif plot_type == "bar":
+                bars = self.axes.bar(
+                    x_data, y_data,
+                    color=color,
+                    alpha=series_config.alpha or 1.0,
+                    label=label
+                )
+                plot_objects.extend(bars)
+                
+            elif plot_type == "area":
+                area = self.axes.fill_between(
+                    x_data, y_data,
+                    color=color,
+                    alpha=series_config.alpha or 1.0,
+                    label=label
+                )
+                plot_objects.append(area)
+                
+            elif plot_type == "step":
+                line = self.axes.step(
+                    x_data, y_data,
+                    color=color,
+                    linewidth=series_config.line_width or 1.0,
+                    alpha=series_config.alpha or 1.0,
+                    label=label
+                )[0]
+                plot_objects.append(line)
+            
+            return plot_objects
+            
+        except Exception as e:
+            logger.error(f"Error plotting series: {e}")
+            return []
+
+    def _update_plot_appearance(self):
+        """Update plot appearance and styling"""
+        try:
+            if not self.axes:
+                return
+                
+            # Update grid
+            self.axes.grid(self.show_grid, alpha=0.3)
+            
+            # Update legend
+            if self.show_legend and any(line.get_label() and not line.get_label().startswith('_') 
+                                      for line in self.axes.get_lines()):
+                self.axes.legend(loc=self.legend_location)
+            
+            # Auto-scale if enabled
+            if self.auto_scale:
+                self.axes.relim()
+                self.axes.autoscale()
+            
+            # Refresh canvas if available
+            if self.canvas:
+                self.canvas.draw()
+                
+        except Exception as e:
+            logger.error(f"Error updating plot appearance: {e}")
+
+    def _get_next_color(self) -> str:
+        """Get the next color from the color cycle"""
+        color = self.color_cycle(self.color_index % 10)
+        self.color_index += 1
+        return f"#{int(color[0]*255):02x}{int(color[1]*255):02x}{int(color[2]*255):02x}"
+
+    def set_plot_config(self, config: PlotConfiguration):
+        """Set plot configuration"""
+        self.plot_config = config
+        self._apply_plot_config()
+
+    def _apply_plot_config(self):
+        """Apply plot configuration to axes"""
+        try:
+            if not self.axes:
+                return
+                
+            # Apply titles and labels
+            if self.plot_config.title:
+                self.axes.set_title(self.plot_config.title)
+            if self.plot_config.x_label:
+                self.axes.set_xlabel(self.plot_config.x_label)
+            if self.plot_config.y_label:
+                self.axes.set_ylabel(self.plot_config.y_label)
+            
+            # Apply grid settings
+            self.show_grid = self.plot_config.show_grid
+            self.axes.grid(self.show_grid, alpha=0.3)
+            
+            # Apply legend settings
+            self.show_legend = self.plot_config.show_legend
+            self.legend_location = self.plot_config.legend_location or "best"
+            
+            # Refresh appearance
+            self._update_plot_appearance()
+            
+        except Exception as e:
+            logger.error(f"Error applying plot config: {e}")
+
+    def export_plot(self, filename: str, **kwargs):
+        """Export plot to file"""
+        try:
+            if self.figure:
+                self.figure.savefig(filename, **kwargs)
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Error exporting plot: {e}")
+            return False
+
+    def get_plot_statistics(self) -> Dict[str, Any]:
+        """Get statistics about the current plot"""
+        try:
+            stats = {
+                'num_series': len(self.plotted_series),
+                'series_names': [config.name for config in self.series_configs.values()],
+                'data_points': sum(len(data['y_data']) for data in self.plotted_series.values()),
+                'plot_config': self.plot_config.__dict__ if self.plot_config else {}
+            }
+            return stats
+        except Exception as e:
+            logger.error(f"Error getting plot statistics: {e}")
+            return {}
 
     def create_figure(self, parent_widget=None, width: float = 14, height: float = 9, dpi: int = 100) -> Tuple[
         Figure, FigureCanvasTkAgg, NavigationToolbar2Tk]:

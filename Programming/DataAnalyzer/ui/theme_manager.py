@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Enhanced Theme Manager for consistent dark mode styling
+Theme Manager for consistent dark mode styling
 """
 
 import customtkinter as ctk
@@ -11,7 +11,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-class EnhancedThemeManager:
+class ThemeManager:
     """Manages consistent theming across the application"""
     
     def __init__(self):
@@ -263,4 +263,4 @@ class EnhancedThemeManager:
         }
 
 # Global theme manager instance
-theme_manager = EnhancedThemeManager()
+theme_manager = ThemeManager()

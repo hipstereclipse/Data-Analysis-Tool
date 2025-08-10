@@ -29,17 +29,11 @@ from config.constants import (
     KeyBindings, DefaultSettings
 )
 
-from ui.series_dialog import show_series_dialog
-from ui.annotation_dialog import show_annotation_dialog
-from ui.multi_series_analysis import show_multi_series_analysis
-from core.ui_factory import UIFactory
-from core.data_utils import DataProcessor, DataValidator
-
 # Import enhanced components
 from ui.theme_manager import theme_manager
-from ui.series_dialog import show_series_dialog, SeriesDialog, DualHandleRangeSlider
-from ui.multi_series_analysis import show_multi_series_analysis
-from core.plot_manager import PlotManager
+from ui.enhanced_series_dialog import show_enhanced_series_dialog, EnhancedSeriesDialog, DualHandleRangeSlider
+from ui.enhanced_multi_series_analysis import show_enhanced_multi_series_analysis
+from core.enhanced_plot_manager import EnhancedPlotManager
 from ui.theme_manager import EnhancedThemeManager
 
 # Import models
@@ -54,8 +48,8 @@ from ui.dialogs import (
     SeriesConfigDialog, VacuumAnalysisDialog, AnnotationDialog,
     DataSelectorDialog, PlotConfigDialog, ExportDialog
 )
-from ui.series_dialog import show_smart_series_dialog
-from ui.annotation_dialog import show_modern_annotation_dialog
+from ui.smart_series_dialog import show_smart_series_dialog
+from ui.modern_annotation_dialog import show_modern_annotation_dialog
 
 # Import core managers
 from core.file_manager import FileManager
@@ -1784,7 +1778,7 @@ class ExcelDataPlotter(ctk.CTk):
                     self.status_bar.set_status("Failed to apply series configuration", "error")
             
             # Create dialog instance with callback
-            dialog = SeriesDialog(self, file_data, series, on_series_configured)
+            dialog = EnhancedSeriesDialog(self, file_data, series, on_series_configured)
             dialog_result = dialog.show_dialog()
             
             # No additional processing needed - the callback handles all updates
@@ -2646,7 +2640,7 @@ class ExcelDataPlotter(ctk.CTk):
                 return
                 
             # Show the enhanced analysis dialog
-            result = show_multi_series_analysis(self, self.all_series, self.loaded_files)
+            result = show_enhanced_multi_series_analysis(self, self.all_series, self.loaded_files)
             
             if result:
                 self.status_bar.set_status("Enhanced multi-series analysis completed", "success")
@@ -2861,7 +2855,7 @@ class ExcelDataPlotter(ctk.CTk):
             return
         
         # Create new series with smart dialog
-        new_series = show_series_dialog(self, file_data, None)
+        new_series = show_enhanced_series_dialog(self, file_data, None)
         if new_series:
             # Add to series configurations
             self.series_configs[new_series.id] = new_series
@@ -3102,7 +3096,7 @@ class ExcelDataPlotter(ctk.CTk):
             end_index=end_idx
         )
 
-        dialog_result = show_series_dialog(self, matching_file, series)
+        dialog_result = show_enhanced_series_dialog(self, matching_file, series)
         if dialog_result:
             # Update the main form with the advanced configuration
             updated_series = dialog_result

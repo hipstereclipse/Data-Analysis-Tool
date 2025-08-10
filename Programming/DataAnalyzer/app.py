@@ -336,17 +336,19 @@ class ExcelDataPlotter(ctk.CTk):
         self.top_bar.add_action("Plot Config", "⚙️", self.show_advanced_plot_config, "Advanced plot configuration", side="center")
 
     def create_main_content(self):
-        """Create the main content area with responsive layout"""
-        # Content frame with improved layout
+        """Create the main content area with responsive layout including real-time preview"""
+        # Content frame with three-column layout
         self.content_frame = ctk.CTkFrame(self.main_container)
         self.content_frame.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
         self.content_frame.grid_rowconfigure(0, weight=1)
-        self.content_frame.grid_columnconfigure(1, weight=3)  # Give more weight to plot area
+        self.content_frame.grid_columnconfigure(0, weight=0)  # Sidebar
+        self.content_frame.grid_columnconfigure(1, weight=3)  # Main plot area
+        self.content_frame.grid_columnconfigure(2, weight=1)  # Preview panel
 
         # Responsive sidebar with better sizing
-        sidebar_width = max(320, int(self.winfo_screenwidth() * 0.22))  # 22% of screen width, min 320px
+        sidebar_width = max(300, int(self.winfo_screenwidth() * 0.18))  # 18% of screen width, min 300px
         self.sidebar = ctk.CTkFrame(self.content_frame, width=sidebar_width)
-        self.sidebar.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
+        self.sidebar.grid(row=0, column=0, sticky="nsew", padx=(0, 3))
         self.sidebar.grid_propagate(False)
 
         # Sidebar content with simplified tabs
@@ -364,7 +366,7 @@ class ExcelDataPlotter(ctk.CTk):
 
         # Main plot area with improved responsive design
         self.plot_area_frame = ctk.CTkFrame(self.content_frame)
-        self.plot_area_frame.grid(row=0, column=1, sticky="nsew", padx=5)
+        self.plot_area_frame.grid(row=0, column=1, sticky="nsew", padx=3)
         
         # Configure plot area grid for responsive content
         self.plot_area_frame.grid_rowconfigure(0, weight=1)
@@ -372,6 +374,15 @@ class ExcelDataPlotter(ctk.CTk):
 
         # Create plot area
         self.create_plot_area()
+
+        # Real-time preview panel on the right
+        preview_width = max(280, int(self.winfo_screenwidth() * 0.18))  # 18% of screen width, min 280px
+        self.preview_panel = ctk.CTkFrame(self.content_frame, width=preview_width)
+        self.preview_panel.grid(row=0, column=2, sticky="nsew", padx=(3, 0))
+        self.preview_panel.grid_propagate(False)
+
+        # Create preview panel content
+        self.create_preview_panel()
 
     def create_files_panel(self, parent):
         """Create the files management panel"""

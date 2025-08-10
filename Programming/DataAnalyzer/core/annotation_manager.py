@@ -309,25 +309,30 @@ class AnnotationManager:
         return annotation
 
     def add_spike_annotation(self, x: float, y: float, magnitude: float,
-                           series_name: str = "") -> AnnotationConfig:
+                           series_name: str = "", label: str = "", color: str = "red") -> AnnotationConfig:
         """
         Add spike annotation for vacuum analysis
         
         Args:
-            x: X coordinate
-            y: Y coordinate
+            x: X coordinate (start of spike)
+            y: Y coordinate (could be end of spike)  
             magnitude: Spike magnitude
             series_name: Name of the series
+            label: Label for the spike annotation
+            color: Color for the annotation
             
         Returns:
             Created AnnotationConfig
         """
+        # Use provided label or create default
+        annotation_text = label if label else f"Spike: {magnitude:.2e} ({series_name})"
+        
         annotation = AnnotationConfig(
             annotation_type="point",
-            text=f"Spike: {magnitude:.2e} ({series_name})",
+            text=annotation_text,
             x=x,
             y=y,
-            color="#FF0000",
+            color=color,
             marker="^",
             marker_size=8.0,
             alpha=0.9

@@ -366,7 +366,7 @@ class PlotPanel(ctk.CTkFrame):
         # Welcome message
         welcome_label = ctk.CTkLabel(
             self.empty_frame,
-            text="Professional Multi-File Excel Data Plotter\nVacuum Analysis Edition\n\n"
+            text="Multi-File Excel Data Plotter\nVacuum Analysis Edition\n\n"
                  "Load files and configure series to begin plotting",
             font=("", 16),
             text_color=("gray40", "gray60")

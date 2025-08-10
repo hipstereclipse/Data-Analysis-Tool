@@ -16,6 +16,7 @@ from matplotlib.figure import Figure
 from analysis.legacy_analysis_tools import VacuumAnalysisTools, DataAnalysisTools
 from models.data_models import FileData, SeriesConfig
 from ui.components import CollapsiblePanel
+from ui.theme_manager import ThemeManager
 
 
 class VacuumAnalysisDialog:
@@ -38,6 +39,9 @@ class VacuumAnalysisDialog:
         self.all_series = all_series or {}
         self.loaded_files = loaded_files or {}
         self.result = None
+        
+        # Initialize theme manager
+        self.theme_manager = ThemeManager()
 
         # Analysis results storage
         self.analysis_results = {}
@@ -406,7 +410,7 @@ stability over time."""
             widget.destroy()
 
         # Create matplotlib figure
-        fig = Figure(figsize=(8, 6), facecolor='white')
+        fig = Figure(figsize=(8, 6), facecolor=self.theme_manager.get_color("bg_secondary"))
         ax = fig.add_subplot(111)
 
         # Plot data
@@ -481,7 +485,7 @@ leak sources or non-steady behavior."""
             widget.destroy()
 
         # Create matplotlib figure
-        fig = Figure(figsize=(8, 6), facecolor='white')
+        fig = Figure(figsize=(8, 6), facecolor=self.theme_manager.get_color("bg_secondary"))
         ax = fig.add_subplot(111)
 
         # Plot data
@@ -553,7 +557,7 @@ stability and measurement quality."""
             widget.destroy()
 
         # Create matplotlib figure
-        fig = Figure(figsize=(8, 6), facecolor='white')
+        fig = Figure(figsize=(8, 6), facecolor=self.theme_manager.get_color("bg_secondary"))
         
         # Detrended signal
         ax1 = fig.add_subplot(211)
@@ -642,7 +646,7 @@ to detect smaller pressure variations."""
             widget.destroy()
 
         # Create matplotlib figure
-        fig = Figure(figsize=(8, 6), facecolor='white')
+        fig = Figure(figsize=(8, 6), facecolor=self.theme_manager.get_color("bg_secondary"))
         ax = fig.add_subplot(111)
 
         # Plot data
@@ -721,7 +725,7 @@ vacuum levels."""
             widget.destroy()
 
         # Create matplotlib figure
-        fig = Figure(figsize=(8, 6), facecolor='white')
+        fig = Figure(figsize=(8, 6), facecolor=self.theme_manager.get_color("bg_secondary"))
         ax = fig.add_subplot(111)
 
         # Plot data
@@ -797,7 +801,7 @@ rate calculated from pressure rise."""
             widget.destroy()
 
         # Create matplotlib figure
-        fig = Figure(figsize=(8, 6), facecolor='white')
+        fig = Figure(figsize=(8, 6), facecolor=self.theme_manager.get_color("bg_secondary"))
         ax = fig.add_subplot(111)
 
         # Plot outgassing rate

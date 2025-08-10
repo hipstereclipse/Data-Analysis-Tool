@@ -23,6 +23,7 @@ from config.constants import UIConfig, MissingDataMethods, TrendTypes
 from ui.components import CollapsibleFrame, ToolTip
 from utils.helpers import detect_datetime_column
 from scipy.signal import find_peaks, savgol_filter
+from ui.themed_dialog_base import ThemedDialogBase
 
 
 class SeriesConfigDialog:
@@ -3515,9 +3516,8 @@ class ExportDialog:
         self.result = 'cancel'
         self.dialog.destroy()
 
-class VacuumAnalysisDialog:
-    """Dialog for vacuum-specific data analysis tools"""
-
+class VacuumAnalysisDialog(ThemedDialogBase):
+    """Dialog for vacuum-specific data analysis tools with theme support"""
 
     def _safe_format_float(self, value):
         """Safely format a value as float"""
@@ -3537,7 +3537,6 @@ class VacuumAnalysisDialog:
             loaded_files: Dict[str, FileData],
             vacuum_analyzer: VacuumAnalyzer
     ):
-        self.parent = parent
         self.series_configs = series_configs
         self.loaded_files = loaded_files
         self.vacuum_analyzer = vacuum_analyzer
@@ -3548,31 +3547,23 @@ class VacuumAnalysisDialog:
         self.leak_results = []
         self.pumpdown_results = []
 
-        # Create dialog
-        self.dialog = tk.Toplevel(parent)
-        self.dialog.title("Vacuum Data Analysis Tools")
-        self.dialog.geometry("1000x750")
-        self.dialog.transient(parent)
-        self.dialog.grab_set()
+        # Initialize using themed base class
+        super().__init__(parent, "🔬 Vacuum Data Analysis Tools", (1000, 750))
 
         # Create UI
         self.create_widgets()
 
-        # Center dialog
-        self._center_dialog()
-
-    def _center_dialog(self):
-        """Center dialog on screen"""
-        self.dialog.update_idletasks()
-        x = (self.dialog.winfo_screenwidth() // 2) - (self.dialog.winfo_width() // 2)
-        y = (self.dialog.winfo_screenheight() // 2) - (self.dialog.winfo_height() // 2)
-        self.dialog.geometry(f"+{x}+{y}")
-
     def create_widgets(self):
-        """Create dialog widgets"""
+        """Create dialog widgets with themed components"""
+        # Create main container frame
+        main_frame = self.theme_manager.create_styled_frame(self)
+        main_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        main_frame.grid_columnconfigure(0, weight=1)
+        main_frame.grid_rowconfigure(0, weight=1)
+        
         # Create notebook for different analysis types
-        notebook = ttk.Notebook(self.dialog)
-        notebook.pack(fill="both", expand=True, padx=10, pady=10)
+        notebook = ctk.CTkTabview(main_frame)
+        notebook.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
 
         # Add analysis tabs
         self.create_base_pressure_tab(notebook)
@@ -3580,34 +3571,34 @@ class VacuumAnalysisDialog:
         self.create_leak_detection_tab(notebook)
         self.create_pumpdown_tab(notebook)
 
-        # Buttons
-        button_frame = ctk.CTkFrame(self.dialog)
-        button_frame.pack(fill="x", pady=10, padx=10)
+        # Create button frame
+        button_frame = self.theme_manager.create_styled_frame(main_frame)
+        button_frame.grid(row=1, column=0, sticky="ew", padx=5, pady=5)
 
-        ctk.CTkButton(
+        self.theme_manager.create_styled_button(
             button_frame,
             text="Export Results",
-            command=self.export_results,
-            width=120
+            command=self.export_results
         ).pack(side="right", padx=5)
 
-        ctk.CTkButton(
+        self.theme_manager.create_styled_button(
             button_frame,
             text="Close",
-            command=self.dialog.destroy,
-            width=100
+            command=self.destroy
         ).pack(side="right", padx=5)
 
     def create_base_pressure_tab(self, notebook):
-        """Create base pressure analysis tab"""
-        tab = ttk.Frame(notebook)
-        notebook.add(tab, text="🎯 Base Pressure")
+        """Create base pressure analysis tab with themed components"""
+        # Add tab to notebook
+        tab_name = "🎯 Base Pressure"
+        notebook.add(tab_name)
+        tab = notebook.tab(tab_name)
 
         # Series selection
-        select_frame = ctk.CTkFrame(tab)
+        select_frame = self.theme_manager.create_styled_frame(tab)
         select_frame.pack(fill="x", padx=10, pady=10)
 
-        ctk.CTkLabel(select_frame, text="Series:").pack(side="left", padx=5, pady=5)
+        self.theme_manager.create_styled_label(select_frame, text="Series:").pack(side="left", padx=5, pady=5)
         self.base_series_var = tk.StringVar()
         series_names = [s.name for s in self.series_configs.values()]
         self.base_series_combo = ctk.CTkComboBox(
@@ -3617,71 +3608,71 @@ class VacuumAnalysisDialog:
             width=300
         )
         self.base_series_combo.pack(side="left", padx=5, pady=5)
-        self.base_series_combo.bind("<<ComboboxSelected>>", self.on_base_series_selected)
+        if hasattr(self.base_series_combo, 'bind'):
+            self.base_series_combo.bind("<<ComboboxSelected>>", self.on_base_series_selected)
 
         # Time range selection
-        range_frame = ctk.CTkFrame(tab)
+        range_frame = self.theme_manager.create_styled_frame(tab)
         range_frame.pack(fill="x", padx=10, pady=10)
 
-        ctk.CTkLabel(range_frame, text="Start:").grid(row=0, column=0, padx=5, pady=5)
+        self.theme_manager.create_styled_label(range_frame, text="Start:").grid(row=0, column=0, padx=5, pady=5)
         self.base_start_var = tk.StringVar()
-        self.base_start_entry = ctk.CTkEntry(range_frame, textvariable=self.base_start_var, width=150)
+        self.base_start_entry = self.theme_manager.create_styled_entry(range_frame, textvariable=self.base_start_var, width=150)
         self.base_start_entry.grid(row=0, column=1, padx=5, pady=5)
 
-        ctk.CTkLabel(range_frame, text="End:").grid(row=0, column=2, padx=5, pady=5)
+        self.theme_manager.create_styled_label(range_frame, text="End:").grid(row=0, column=2, padx=5, pady=5)
         self.base_end_var = tk.StringVar()
-        self.base_end_entry = ctk.CTkEntry(range_frame, textvariable=self.base_end_var, width=150)
+        self.base_end_entry = self.theme_manager.create_styled_entry(range_frame, textvariable=self.base_end_var, width=150)
         self.base_end_entry.grid(row=0, column=3, padx=5, pady=5)
 
         # Data info label
-        self.base_info_label = ctk.CTkLabel(range_frame, text="", text_color="gray")
+        self.base_info_label = self.theme_manager.create_styled_label(range_frame, text="", style="secondary")
         self.base_info_label.grid(row=1, column=0, columnspan=4, pady=5)
 
         # Analysis parameters
-        param_frame = ctk.CTkFrame(tab)
+        param_frame = self.theme_manager.create_styled_frame(tab)
         param_frame.pack(fill="x", padx=10, pady=10)
 
-        ctk.CTkLabel(param_frame, text="Window Size (minutes):").pack(side="left", padx=5, pady=5)
+        self.theme_manager.create_styled_label(param_frame, text="Window Size (minutes):").pack(side="left", padx=5, pady=5)
         self.window_size_var = tk.IntVar(value=10)
-        ctk.CTkEntry(param_frame, textvariable=self.window_size_var, width=50).pack(side="left", padx=5, pady=5)
+        window_entry = self.theme_manager.create_styled_entry(param_frame, textvariable=self.window_size_var, width=50)
+        window_entry.pack(side="left", padx=5, pady=5)
 
-        ctk.CTkButton(
+        self.theme_manager.create_styled_button(
             param_frame,
             text="Calculate Base Pressure",
             command=self.calculate_base_pressure
         ).pack(side="left", padx=20, pady=5)
 
         # Results
-        results_frame = ctk.CTkFrame(tab)
+        results_frame = self.theme_manager.create_styled_frame(tab)
         results_frame.pack(fill="both", expand=True, padx=10, pady=10)
 
-        self.base_text = tk.Text(results_frame, wrap="word", font=("Consolas", 10))
-        base_scroll = ttk.Scrollbar(results_frame, command=self.base_text.yview)
-        self.base_text.config(yscrollcommand=base_scroll.set)
-
-        self.base_text.pack(side="left", fill="both", expand=True)
-        base_scroll.pack(side="right", fill="y")
+        self.base_text = ctk.CTkTextbox(results_frame, wrap="word", font=("Consolas", 10))
+        self.base_text.pack(fill="both", expand=True, padx=5, pady=5)
 
         # Action buttons
-        action_frame = ctk.CTkFrame(tab)
+        action_frame = self.theme_manager.create_styled_frame(tab)
         action_frame.pack(fill="x", padx=10, pady=10)
 
-        ctk.CTkButton(
+        self.theme_manager.create_styled_button(
             action_frame,
             text="Add Base Pressure Line to Plot",
             command=self.add_base_pressure_line
         ).pack(side="left", padx=5)
 
     def create_spike_detection_tab(self, notebook):
-        """Create spike detection tab"""
-        tab = ttk.Frame(notebook)
-        notebook.add(tab, text="⚡ Spike Detection")
+        """Create spike detection tab with themed components"""
+        # Add tab to notebook
+        tab_name = "⚡ Spike Detection"
+        notebook.add(tab_name)
+        tab = notebook.tab(tab_name)
 
         # Configuration
-        config_frame = ctk.CTkFrame(tab)
+        config_frame = self.theme_manager.create_styled_frame(tab)
         config_frame.pack(fill="x", padx=10, pady=10)
 
-        ctk.CTkLabel(config_frame, text="Series:").grid(row=0, column=0, padx=5, pady=5)
+        self.theme_manager.create_styled_label(config_frame, text="Series:").grid(row=0, column=0, padx=5, pady=5)
         self.spike_series_var = tk.StringVar()
         series_names = [s.name for s in self.series_configs.values()]
         self.spike_series_combo = ctk.CTkComboBox(
@@ -3693,7 +3684,7 @@ class VacuumAnalysisDialog:
         self.spike_series_combo.grid(row=0, column=1, padx=5, pady=5)
 
         # Threshold setting
-        ctk.CTkLabel(config_frame, text="Threshold (σ):").grid(row=1, column=0, padx=5, pady=5)
+        self.theme_manager.create_styled_label(config_frame, text="Threshold (σ):").grid(row=1, column=0, padx=5, pady=5)
         self.spike_threshold_var = tk.DoubleVar(value=3.0)
         self.spike_threshold_slider = ctk.CTkSlider(
             config_frame,
@@ -3703,7 +3694,7 @@ class VacuumAnalysisDialog:
             width=200
         )
         self.spike_threshold_slider.grid(row=1, column=1, padx=5, pady=5)
-        self.spike_threshold_label = ctk.CTkLabel(config_frame, text="3.0")
+        self.spike_threshold_label = self.theme_manager.create_styled_label(config_frame, text="3.0")
         self.spike_threshold_label.grid(row=1, column=2, padx=5, pady=5)
 
         # Connect slider to label update
@@ -3735,55 +3726,51 @@ class VacuumAnalysisDialog:
                 value=color
             ).pack(side="left", padx=5)
 
-        ctk.CTkButton(
+        button = self.theme_manager.create_styled_button(
             config_frame,
             text="Detect Spikes",
             command=self.detect_spikes
-        ).grid(row=5, column=1, pady=10)
+        )
+        button.grid(row=5, column=1, pady=10)
 
         # Results
         results_frame = ctk.CTkFrame(tab)
         results_frame.pack(fill="both", expand=True, padx=10, pady=10)
 
         columns = ["#", "Start Time", "End Time", "Duration", "Max Pressure", "Severity"]
-        self.spikes_tree = ttk.Treeview(results_frame, columns=columns, show="headings", height=10)
-
-        for col in columns:
-            self.spikes_tree.heading(col, text=col)
-            self.spikes_tree.column(col, width=120)
-
-        spikes_scroll = ttk.Scrollbar(results_frame, orient="vertical", command=self.spikes_tree.yview)
-        self.spikes_tree.configure(yscrollcommand=spikes_scroll.set)
-
-        self.spikes_tree.pack(side="left", fill="both", expand=True)
-        spikes_scroll.pack(side="right", fill="y")
+        self.spikes_tree = ctk.CTkScrollableFrame(results_frame)
+        self.spikes_tree.pack(fill="both", expand=True, padx=5, pady=5)
 
         # Action buttons
-        action_frame = ctk.CTkFrame(tab)
+        action_frame = self.theme_manager.create_styled_frame(tab)
         action_frame.pack(fill="x", padx=10, pady=10)
 
-        ctk.CTkButton(
+        button1 = self.theme_manager.create_styled_button(
             action_frame,
             text="Highlight All Spikes on Plot",
             command=self.highlight_spikes
-        ).pack(side="left", padx=5)
+        )
+        button1.pack(side="left", padx=5)
 
-        ctk.CTkButton(
+        button2 = self.theme_manager.create_styled_button(
             action_frame,
             text="Clear Spike Highlights",
             command=self.clear_spike_highlights
-        ).pack(side="left", padx=5)
+        )
+        button2.pack(side="left", padx=5)
 
     def create_leak_detection_tab(self, notebook):
-        """Create leak detection tab"""
-        tab = ttk.Frame(notebook)
-        notebook.add(tab, text="💨 Leak Detection")
+        """Create leak detection tab with themed components"""
+        # Add tab to notebook
+        tab_name = "💨 Leak Detection"
+        notebook.add(tab_name)
+        tab = notebook.tab(tab_name)
 
         # Configuration
-        config_frame = ctk.CTkFrame(tab)
+        config_frame = self.theme_manager.create_styled_frame(tab)
         config_frame.pack(fill="x", padx=10, pady=10)
 
-        ctk.CTkLabel(config_frame, text="Series:").grid(row=0, column=0, padx=5, pady=5)
+        self.theme_manager.create_styled_label(config_frame, text="Series:").grid(row=0, column=0, padx=5, pady=5)
         self.leak_series_var = tk.StringVar()
         series_names = [s.name for s in self.series_configs.values()]
         self.leak_series_combo = ctk.CTkComboBox(
@@ -3795,7 +3782,7 @@ class VacuumAnalysisDialog:
         self.leak_series_combo.grid(row=0, column=1, padx=5, pady=5)
 
         # Detection parameters
-        ctk.CTkLabel(config_frame, text="Noise Threshold:").grid(row=1, column=0, padx=5, pady=5)
+        self.theme_manager.create_styled_label(config_frame, text="Noise Threshold:").grid(row=1, column=0, padx=5, pady=5)
         self.leak_threshold_var = tk.DoubleVar(value=0.01)
         ctk.CTkEntry(config_frame, textvariable=self.leak_threshold_var, width=100).grid(row=1, column=1, padx=5, pady=5)
 
@@ -3856,15 +3843,17 @@ class VacuumAnalysisDialog:
         ).pack(side="left", padx=5)
 
     def create_pumpdown_tab(self, notebook):
-        """Create pump-down analysis tab"""
-        tab = ttk.Frame(notebook)
-        notebook.add(tab, text="📉 Pump-down")
+        """Create pump-down analysis tab with themed components"""
+        # Add tab to notebook
+        tab_name = "📉 Pump-down"
+        notebook.add(tab_name)
+        tab = notebook.tab(tab_name)
 
         # Configuration
-        config_frame = ctk.CTkFrame(tab)
+        config_frame = self.theme_manager.create_styled_frame(tab)
         config_frame.pack(fill="x", padx=10, pady=10)
 
-        ctk.CTkLabel(config_frame, text="Series:").grid(row=0, column=0, padx=5, pady=5)
+        self.theme_manager.create_styled_label(config_frame, text="Series:").grid(row=0, column=0, padx=5, pady=5)
         self.pump_series_var = tk.StringVar()
         series_names = [s.name for s in self.series_configs.values()]
         self.pump_series_combo = ctk.CTkComboBox(
@@ -3955,8 +3944,8 @@ class VacuumAnalysisDialog:
             return
 
         # Clear previous results
-        for item in self.spikes_tree.get_children():
-            self.spikes_tree.delete(item)
+        for widget in self.spikes_tree.winfo_children():
+            widget.destroy()
         self.spike_results = []
 
         # Find series
@@ -4039,15 +4028,12 @@ class VacuumAnalysisDialog:
                         except (ValueError, TypeError):
                             return str(val)
                     
-                    # Add to tree
-                    self.spikes_tree.insert("", "end", values=[
-                        len(self.spike_results),
-                        format_x_value(x_data[spike_start]),
-                        format_x_value(x_data[i - 1]) if i > 0 else format_x_value(x_data[0]),
-                        duration,
-                        f"{max_pressure:.2e}",
-                        severity
-                    ])
+                    # Add to results display
+                    result_frame = ctk.CTkFrame(self.spikes_tree)
+                    result_frame.pack(fill="x", padx=5, pady=2)
+                    
+                    result_text = f"Spike {len(self.spike_results)}: Start={format_x_value(x_data[spike_start])}, End={format_x_value(x_data[i - 1]) if i > 0 else format_x_value(x_data[0])}, Duration={duration}, Max={max_pressure:.2e}, Severity={severity}"
+                    ctk.CTkLabel(result_frame, text=result_text, anchor="w").pack(fill="x", padx=5, pady=2)
 
                 spike_start = None
 

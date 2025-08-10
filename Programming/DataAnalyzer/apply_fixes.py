@@ -1,5 +1,23 @@
 #!/usr/bin/env python3
 """
+Ultra-aggressive fix for DataQualityAnalyzer
+This ensures bad data scores below 50
+Save and run this file to fix the scoring issue
+"""
+
+from pathlib import Path
+
+
+def apply_ultra_aggressive_fix():
+    """Apply ultra-aggressive scoring to DataQualityAnalyzer"""
+
+    print("=" * 60)
+    print("APPLYING ULTRA-AGGRESSIVE DATAQUALITY FIX")
+    print("=" * 60)
+
+    # Ultra-aggressive scoring content
+    fixed_content = '''#!/usr/bin/env python3
+"""
 Data quality analysis and validation - ULTRA AGGRESSIVE SCORING
 """
 
@@ -195,3 +213,100 @@ class DataQualityAnalyzer:
                 report.issues.append(f"{missing_pct:.1f}% missing values")
 
         return report
+'''
+
+    # Write the file
+    data_quality_path = Path("analysis/data_quality.py")
+
+    # Ensure directory exists
+    if not data_quality_path.parent.exists():
+        data_quality_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Backup existing file
+    if data_quality_path.exists():
+        backup_path = data_quality_path.with_suffix('.py.bak')
+        with open(data_quality_path, 'r', encoding='utf-8') as f:
+            backup_content = f.read()
+        with open(backup_path, 'w', encoding='utf-8') as f:
+            f.write(backup_content)
+        print(f"Backed up existing file to: {backup_path}")
+
+    # Write the ultra-aggressive version
+    with open(data_quality_path, 'w', encoding='utf-8') as f:
+        f.write(fixed_content)
+
+    print(f"✓ Written ultra-aggressive scoring to: {data_quality_path}")
+
+    # Test the fix
+    print("\nTesting the ultra-aggressive fix...")
+    test_scoring()
+
+
+def test_scoring():
+    """Test that the scoring is now aggressive enough"""
+    try:
+        import pandas as pd
+        import numpy as np
+        from analysis.data_quality import DataQualityAnalyzer
+
+        analyzer = DataQualityAnalyzer()
+
+        print("\nTest 1: Good quality data")
+        good_data = pd.DataFrame({
+            'x': np.arange(100),
+            'y': np.random.randn(100),
+            'z': np.random.randn(100) * 10
+        })
+        good_report = analyzer.analyze_quality(good_data)
+        print(f"  Score: {good_report.quality_score:.1f}")
+        print(f"  Issues: {good_report.issues if good_report.issues else 'None'}")
+
+        print("\nTest 2: Bad quality data (33% missing, 33% duplicates)")
+        # Create data similar to your test
+        y_data = [np.nan] * 50 + list(np.random.randn(50))
+        z_data = list(np.random.randn(50)) + [np.nan] * 50
+        bad_data = pd.DataFrame({
+            'x': np.arange(100),
+            'y': y_data,
+            'z': z_data
+        })
+        bad_report = analyzer.analyze_quality(bad_data)
+        print(f"  Score: {bad_report.quality_score:.1f}")
+        print(f"  Issues: {bad_report.issues}")
+
+        print("\nTest 3: Medium quality (20% missing)")
+        medium_data = pd.DataFrame({
+            'x': np.arange(100),
+            'y': [np.nan] * 20 + list(np.random.randn(80)),
+            'z': list(np.random.randn(80)) + [np.nan] * 20
+        })
+        medium_report = analyzer.analyze_quality(medium_data)
+        print(f"  Score: {medium_report.quality_score:.1f}")
+        print(f"  Issues: {medium_report.issues}")
+
+        # Check if scoring is correct
+        print("\n" + "=" * 60)
+        if good_report.quality_score > 90 and bad_report.quality_score < 50 and 50 <= medium_report.quality_score <= 80:
+            print("✅ ULTRA-AGGRESSIVE SCORING IS WORKING PERFECTLY!")
+            print(f"  Good data: {good_report.quality_score:.1f} (>90) ✓")
+            print(f"  Bad data: {bad_report.quality_score:.1f} (<50) ✓")
+            print(f"  Medium data: {medium_report.quality_score:.1f} (50-80) ✓")
+        else:
+            print("⚠️ Scoring still needs adjustment:")
+            print(f"  Good data: {good_report.quality_score:.1f} (expected >90)")
+            print(f"  Bad data: {bad_report.quality_score:.1f} (expected <50)")
+            print(f"  Medium data: {medium_report.quality_score:.1f} (expected 50-80)")
+
+    except Exception as e:
+        print(f"\n❌ Error testing: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+if __name__ == "__main__":
+    apply_ultra_aggressive_fix()
+    print("\n" + "=" * 60)
+    print("Fix applied! Now run your tests:")
+    print("  python run_tests.py")
+    print("  python test_fixes.py")
+    print("=" * 60)

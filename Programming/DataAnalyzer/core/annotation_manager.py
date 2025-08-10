@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 """
-Annotation management system
+core/annotation_manager.py - Annotation Manager
+Handles plot annotations including text, arrows, and shapes
 """
 
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+from typing import List, Dict, Optional, Any, Tuple
 import logging
-from typing import Dict, List, Optional, Any, Tuple
-import uuid
-from dataclasses import dataclass, field
-import numpy as np
-from matplotlib.patches import Rectangle, FancyBboxPatch, FancyArrowPatch
-from matplotlib.text import Annotation as MplAnnotation
 
 from models.data_models import AnnotationConfig
 
@@ -17,327 +15,375 @@ logger = logging.getLogger(__name__)
 
 
 class AnnotationManager:
-    """Manages plot annotations"""
+    """
+    Manages plot annotations
+    Handles adding, removing, and updating annotations on plots
+    """
 
     def __init__(self):
-        self.annotations: Dict[str, AnnotationConfig] = {}
-        self.mpl_objects: Dict[str, Any] = {}
-        self.axes: Optional[Any] = None
+        """Initialize annotation manager"""
+        self.annotations: List[AnnotationConfig] = []
+        self.annotation_objects: Dict[str, Any] = {}
+        self.current_axes = None
+        self.data_context = None
 
-    def add_annotation(self, annotation: AnnotationConfig) -> str:
-        """Add an annotation"""
-        self.annotations[annotation.id] = annotation
-        logger.debug(f"Added annotation: {annotation.id} ({annotation.type})")
-        return annotation.id
+    def set_data_context(self, axes):
+        """
+        Set the current axes and data context
 
-    def remove_annotation(self, annotation_id: str) -> bool:
-        """Remove an annotation"""
-        if annotation_id in self.annotations:
-            del self.annotations[annotation_id]
+        Args:
+            axes: Matplotlib axes object
+        """
+        self.current_axes = axes
+        if axes:
+            self.data_context = {
+                'xlim': axes.get_xlim(),
+                'ylim': axes.get_ylim(),
+                'xscale': axes.get_xscale(),
+                'yscale': axes.get_yscale()
+            }
 
-            # Remove matplotlib object if exists
-            if annotation_id in self.mpl_objects:
-                obj = self.mpl_objects[annotation_id]
-                try:
-                    obj.remove()
-                except:
-                    pass
-                del self.mpl_objects[annotation_id]
+    def add_annotation(self, annotation: AnnotationConfig):
+        """
+        Add an annotation
 
-            logger.debug(f"Removed annotation: {annotation_id}")
-            return True
-        return False
+        Args:
+            annotation: AnnotationConfig object
+        """
+        self.annotations.append(annotation)
+        if self.current_axes:
+            self.draw_annotation(annotation)
 
-    def update_annotation(self, annotation_id: str, **kwargs) -> bool:
-        """Update annotation properties"""
-        if annotation_id in self.annotations:
-            annotation = self.annotations[annotation_id]
+    def remove_annotation(self, annotation_id: str):
+        """
+        Remove an annotation
 
-            for key, value in kwargs.items():
-                if hasattr(annotation, key):
-                    setattr(annotation, key, value)
+        Args:
+            annotation_id: Annotation identifier
+        """
+        # Remove from list
+        self.annotations = [a for a in self.annotations if a.annotation_id != annotation_id]
 
-            logger.debug(f"Updated annotation: {annotation_id}")
-            return True
-        return False
-
-    def get_annotation(self, annotation_id: str) -> Optional[AnnotationConfig]:
-        """Get annotation by ID"""
-        return self.annotations.get(annotation_id)
-
-    def get_annotations(self) -> Dict[str, AnnotationConfig]:
-        """Get all annotations"""
-        return self.annotations.copy()
-
-    def set_annotations(self, annotations: Dict[str, AnnotationConfig]):
-        """Set all annotations"""
-        self.annotations = annotations.copy()
+        # Remove from plot
+        if annotation_id in self.annotation_objects:
+            obj = self.annotation_objects[annotation_id]
+            if hasattr(obj, 'remove'):
+                obj.remove()
+            del self.annotation_objects[annotation_id]
 
     def clear_annotations(self):
         """Clear all annotations"""
-        # Remove matplotlib objects
-        for obj in self.mpl_objects.values():
-            try:
-                obj.remove()
-            except:
-                pass
-
+        for ann_id in list(self.annotation_objects.keys()):
+            self.remove_annotation(ann_id)
         self.annotations.clear()
-        self.mpl_objects.clear()
-        logger.debug("Cleared all annotations")
 
-    def apply_annotations(self, figure: Any):
-        """Apply annotations to a figure"""
-        if not figure.axes:
+    def draw_annotation(self, annotation: AnnotationConfig):
+        """
+        Draw a single annotation on the current axes
+
+        Args:
+            annotation: AnnotationConfig object
+        """
+        if not self.current_axes or not annotation.visible:
             return
 
-        self.axes = figure.axes[0]
+        try:
+            ax = self.current_axes
+            ann_obj = None
 
-        # Clear existing matplotlib objects
-        for obj in self.mpl_objects.values():
-            try:
-                obj.remove()
-            except:
-                pass
-        self.mpl_objects.clear()
-
-        # Apply each annotation
-        for ann_id, annotation in self.annotations.items():
-            if not annotation.visible:
-                continue
-
-            try:
-                mpl_obj = self._create_annotation_object(annotation)
-                if mpl_obj:
-                    self.mpl_objects[ann_id] = mpl_obj
-            except Exception as e:
-                logger.error(f"Failed to create annotation {ann_id}: {e}")
-
-    def _create_annotation_object(self, annotation: AnnotationConfig) -> Optional[Any]:
-        """Create matplotlib object for annotation"""
-
-        if annotation.type == 'line':
-            return self._create_line_annotation(annotation)
-        elif annotation.type == 'region':
-            return self._create_region_annotation(annotation)
-        elif annotation.type == 'text':
-            return self._create_text_annotation(annotation)
-        elif annotation.type == 'arrow':
-            return self._create_arrow_annotation(annotation)
-        elif annotation.type == 'point':
-            return self._create_point_annotation(annotation)
-        else:
-            logger.warning(f"Unknown annotation type: {annotation.type}")
-            return None
-
-    def _create_line_annotation(self, ann: AnnotationConfig) -> Any:
-        """Create line annotation"""
-        if ann.x_data is not None:
-            # Vertical line
-            return self.axes.axvline(
-                x=ann.x_data,
-                color=ann.color,
-                linestyle=ann.line_style,
-                linewidth=ann.line_width,
-                alpha=ann.alpha,
-                label=ann.label if ann.label else None
-            )
-        elif ann.y_data is not None:
-            # Horizontal line
-            return self.axes.axhline(
-                y=ann.y_data,
-                color=ann.color,
-                linestyle=ann.line_style,
-                linewidth=ann.line_width,
-                alpha=ann.alpha,
-                label=ann.label if ann.label else None
-            )
-        return None
-
-    def _create_region_annotation(self, ann: AnnotationConfig) -> Any:
-        """Create region annotation"""
-        if ann.x_data is not None and ann.x_end is not None:
-            # Vertical region
-            return self.axes.axvspan(
-                ann.x_data, ann.x_end,
-                color=ann.color,
-                alpha=ann.alpha,
-                label=ann.label if ann.label else None
-            )
-        elif ann.y_data is not None and ann.y_end is not None:
-            # Horizontal region
-            return self.axes.axhspan(
-                ann.y_data, ann.y_end,
-                color=ann.color,
-                alpha=ann.alpha,
-                label=ann.label if ann.label else None
-            )
-        return None
-
-    def _create_text_annotation(self, ann: AnnotationConfig) -> Any:
-        """Create text annotation"""
-        if ann.x_data is None or ann.y_data is None or not ann.text:
-            return None
-
-        # Create text with optional arrow
-        if ann.x_end is not None and ann.y_end is not None:
-            # Text with arrow pointing to location
-            return self.axes.annotate(
-                ann.text,
-                xy=(ann.x_data, ann.y_data),
-                xytext=(ann.x_end, ann.y_end),
-                fontsize=ann.fontsize,
-                color=ann.color,
-                alpha=ann.alpha,
-                arrowprops=dict(
-                    arrowstyle='->',
-                    color=ann.color,
-                    alpha=ann.alpha,
-                    linewidth=ann.line_width
-                ),
-                bbox=dict(
-                    boxstyle='round,pad=0.3',
-                    facecolor='white',
-                    alpha=0.7
+            if annotation.annotation_type == "text":
+                ann_obj = ax.annotate(
+                    annotation.text,
+                    xy=(annotation.x, annotation.y),
+                    xycoords='data' if self.is_data_coordinates(annotation) else 'axes fraction',
+                    fontsize=annotation.font_size,
+                    fontfamily=annotation.font_family,
+                    fontweight=annotation.font_weight,
+                    fontstyle=annotation.font_style,
+                    color=annotation.color,
+                    ha=annotation.horizontal_alignment,
+                    va=annotation.vertical_alignment,
+                    rotation=annotation.rotation,
+                    bbox=dict(boxstyle="round,pad=0.3",
+                              facecolor=annotation.background_color or 'white',
+                              edgecolor=annotation.border_color or annotation.color,
+                              linewidth=annotation.border_width,
+                              alpha=annotation.alpha) if annotation.background_color else None
                 )
-            )
-        else:
-            # Simple text
-            return self.axes.text(
-                ann.x_data, ann.y_data,
-                ann.text,
-                fontsize=ann.fontsize,
-                color=ann.color,
-                alpha=ann.alpha,
-                bbox=dict(
-                    boxstyle='round,pad=0.3',
-                    facecolor='white',
-                    alpha=0.7
+
+            elif annotation.annotation_type == "arrow":
+                ann_obj = ax.annotate(
+                    annotation.text if annotation.text else "",
+                    xy=(annotation.x2, annotation.y2),
+                    xytext=(annotation.x, annotation.y),
+                    xycoords='data' if self.is_data_coordinates(annotation) else 'axes fraction',
+                    textcoords='data' if self.is_data_coordinates(annotation) else 'axes fraction',
+                    arrowprops=dict(
+                        arrowstyle=annotation.arrow_style or "->",
+                        color=annotation.color,
+                        lw=annotation.arrow_width,
+                        alpha=annotation.alpha
+                    ),
+                    fontsize=annotation.font_size if annotation.text else 0,
+                    color=annotation.color
                 )
-            )
 
-    def _create_arrow_annotation(self, ann: AnnotationConfig) -> Any:
-        """Create arrow annotation"""
-        if (ann.x_data is None or ann.y_data is None or
-                ann.x_end is None or ann.y_end is None):
-            return None
+            elif annotation.annotation_type == "line":
+                x_vals = [annotation.x, annotation.x2]
+                y_vals = [annotation.y, annotation.y2]
+                ann_obj = ax.plot(
+                    x_vals, y_vals,
+                    color=annotation.color,
+                    linewidth=annotation.border_width,
+                    linestyle=annotation.line_style if hasattr(annotation, 'line_style') else '-',
+                    alpha=annotation.alpha
+                )[0]
 
-        arrow = FancyArrowPatch(
-            (ann.x_data, ann.y_data),
-            (ann.x_end, ann.y_end),
-            arrowstyle='->',
-            color=ann.color,
-            linewidth=ann.line_width,
-            alpha=ann.alpha,
-            mutation_scale=20
-        )
+            elif annotation.annotation_type == "rect":
+                # Convert coordinates if needed
+                if self.is_data_coordinates(annotation):
+                    xy = (annotation.x, annotation.y)
+                    width = annotation.width
+                    height = annotation.height
+                else:
+                    # For axes fraction coordinates
+                    xy = ax.transAxes.transform((annotation.x, annotation.y))
+                    xy = ax.transData.inverted().transform(xy)
+                    width_point = ax.transAxes.transform((annotation.width, 0))[0]
+                    height_point = ax.transAxes.transform((0, annotation.height))[1]
+                    width = ax.transData.inverted().transform((width_point, 0))[0] - xy[0]
+                    height = ax.transData.inverted().transform((0, height_point))[1] - xy[1]
 
-        self.axes.add_patch(arrow)
-        return arrow
+                rect = patches.Rectangle(
+                    xy, width, height,
+                    linewidth=annotation.border_width,
+                    edgecolor=annotation.border_color or annotation.color,
+                    facecolor=annotation.color if annotation.fill else 'none',
+                    alpha=annotation.alpha
+                )
+                ax.add_patch(rect)
+                ann_obj = rect
 
-    def _create_point_annotation(self, ann: AnnotationConfig) -> Any:
-        """Create point annotation"""
-        if ann.x_data is None or ann.y_data is None:
-            return None
+            elif annotation.annotation_type == "circle":
+                circle = patches.Circle(
+                    (annotation.x, annotation.y),
+                    annotation.radius,
+                    linewidth=annotation.border_width,
+                    edgecolor=annotation.border_color or annotation.color,
+                    facecolor=annotation.color if annotation.fill else 'none',
+                    alpha=annotation.alpha
+                )
+                ax.add_patch(circle)
+                ann_obj = circle
 
-        # Create scatter point
-        scatter = self.axes.scatter(
-            [ann.x_data], [ann.y_data],
-            s=100,
-            marker='o',
-            color=ann.color,
-            alpha=ann.alpha,
-            zorder=5,
-            edgecolors='black',
-            linewidths=1
-        )
+            # Store reference
+            if ann_obj:
+                self.annotation_objects[annotation.annotation_id] = ann_obj
 
-        # Add label if provided
-        if ann.label:
-            self.axes.annotate(
-                ann.label,
-                xy=(ann.x_data, ann.y_data),
-                xytext=(5, 5),
-                textcoords='offset points',
-                fontsize=ann.fontsize,
-                color=ann.color,
-                alpha=ann.alpha
-            )
+        except Exception as e:
+            logger.error(f"Failed to draw annotation: {e}")
 
-        return scatter
+    def is_data_coordinates(self, annotation: AnnotationConfig) -> bool:
+        """
+        Determine if annotation uses data coordinates or axes fraction
 
-    def find_annotations_at_point(self, x: float, y: float, tolerance: float = 0.05) -> List[str]:
-        """Find annotations near a point"""
-        found = []
+        Args:
+            annotation: AnnotationConfig object
 
-        for ann_id, ann in self.annotations.items():
-            if self._is_near_annotation(ann, x, y, tolerance):
-                found.append(ann_id)
-
-        return found
-
-    def _is_near_annotation(self, ann: AnnotationConfig, x: float, y: float, tolerance: float) -> bool:
-        """Check if point is near annotation"""
-
-        if ann.type == 'point':
-            if ann.x_data and ann.y_data:
-                dist = np.sqrt((x - ann.x_data) ** 2 + (y - ann.y_data) ** 2)
-                return dist < tolerance
-
-        elif ann.type == 'line':
-            if ann.x_data is not None:
-                return abs(x - ann.x_data) < tolerance
-            elif ann.y_data is not None:
-                return abs(y - ann.y_data) < tolerance
-
-        elif ann.type == 'region':
-            if ann.x_data and ann.x_end:
-                return ann.x_data <= x <= ann.x_end
-            elif ann.y_data and ann.y_end:
-                return ann.y_data <= y <= ann.y_end
-
+        Returns:
+            True if data coordinates, False if axes fraction
+        """
+        # Check if coordinates are likely to be data coordinates
+        # This is a heuristic - could be improved with explicit flag
+        if annotation.x > 1 or annotation.x < 0 or annotation.y > 1 or annotation.y < 0:
+            return True
         return False
 
-    def export_annotations(self) -> List[Dict[str, Any]]:
-        """Export annotations to list of dicts"""
-        return [
-            {
-                'id': ann.id,
-                'type': ann.type,
-                'label': ann.label,
-                'color': ann.color,
-                'alpha': ann.alpha,
-                'line_width': ann.line_width,
-                'line_style': ann.line_style,
-                'x_data': ann.x_data,
-                'y_data': ann.y_data,
-                'x_end': ann.x_end,
-                'y_end': ann.y_end,
-                'text': ann.text,
-                'fontsize': ann.fontsize,
-                'visible': ann.visible
-            }
-            for ann in self.annotations.values()
-        ]
+    def draw_annotations(self, axes):
+        """
+        Draw all annotations on given axes (alias for draw_all_annotations)
 
-    def import_annotations(self, data: List[Dict[str, Any]]):
-        """Import annotations from list of dicts"""
+        Args:
+            axes: Matplotlib axes object
+        """
+        self.draw_all_annotations(axes)
+
+    def draw_all_annotations(self, axes):
+        """
+        Draw all annotations on given axes
+
+        Args:
+            axes: Matplotlib axes object
+        """
+        self.set_data_context(axes)
+        for annotation in self.annotations:
+            if annotation.visible:
+                self.draw_annotation(annotation)
+
+    def update_annotation(self, annotation: AnnotationConfig):
+        """
+        Update an existing annotation
+
+        Args:
+            annotation: Updated AnnotationConfig object
+        """
+        # Remove old annotation object
+        if annotation.annotation_id in self.annotation_objects:
+            obj = self.annotation_objects[annotation.annotation_id]
+            if hasattr(obj, 'remove'):
+                obj.remove()
+            del self.annotation_objects[annotation.annotation_id]
+
+        # Update in list
+        for i, ann in enumerate(self.annotations):
+            if ann.annotation_id == annotation.annotation_id:
+                self.annotations[i] = annotation
+                break
+
+        # Redraw
+        if self.current_axes:
+            self.draw_annotation(annotation)
+
+    def get_annotations(self) -> List[AnnotationConfig]:
+        """Get all annotations"""
+        return self.annotations
+
+    def set_annotations(self, annotations: List[AnnotationConfig]):
+        """Set annotations from list"""
         self.clear_annotations()
+        self.annotations = annotations
+        if self.current_axes:
+            self.draw_all_annotations(self.current_axes)
 
-        for item in data:
-            ann = AnnotationConfig(
-                type=item['type'],
-                label=item.get('label', ''),
-                color=item.get('color', 'red'),
-                alpha=item.get('alpha', 0.7),
-                line_width=item.get('line_width', 2),
-                line_style=item.get('line_style', '-'),
-                x_data=item.get('x_data'),
-                y_data=item.get('y_data'),
-                x_end=item.get('x_end'),
-                y_end=item.get('y_end'),
-                text=item.get('text'),
-                fontsize=item.get('fontsize', 10),
-                visible=item.get('visible', True)
-            )
-            self.add_annotation(ann)
+    def find_annotation_at_point(self, x: float, y: float) -> Optional[AnnotationConfig]:
+        """
+        Find annotation at given point
+
+        Args:
+            x: X coordinate
+            y: Y coordinate
+
+        Returns:
+            AnnotationConfig if found, None otherwise
+        """
+        # Simple proximity check - could be improved
+        for annotation in self.annotations:
+            if annotation.annotation_type == "text":
+                if abs(annotation.x - x) < 0.05 and abs(annotation.y - y) < 0.05:
+                    return annotation
+        return None
+
+    def add_pumpdown_annotation(self, x_start: float, x_end: float, y_value: float, 
+                               series_name: str = "") -> AnnotationConfig:
+        """
+        Add pumpdown annotation for vacuum analysis
+        
+        Args:
+            x_start: Start X coordinate
+            x_end: End X coordinate  
+            y_value: Y coordinate for annotation
+            series_name: Name of the series
+            
+        Returns:
+            Created AnnotationConfig
+        """
+        annotation = AnnotationConfig(
+            annotation_type="line",
+            text=f"Pumpdown: {series_name}",
+            x=x_start,
+            y=y_value,
+            x2=x_end,
+            y2=y_value,
+            color="#FF6B35",
+            line_style="--",
+            alpha=0.8
+        )
+        self.add_annotation(annotation)
+        return annotation
+
+    def add_spike_annotation(self, x: float, y: float, magnitude: float,
+                           series_name: str = "") -> AnnotationConfig:
+        """
+        Add spike annotation for vacuum analysis
+        
+        Args:
+            x: X coordinate
+            y: Y coordinate
+            magnitude: Spike magnitude
+            series_name: Name of the series
+            
+        Returns:
+            Created AnnotationConfig
+        """
+        annotation = AnnotationConfig(
+            annotation_type="point",
+            text=f"Spike: {magnitude:.2e} ({series_name})",
+            x=x,
+            y=y,
+            color="#FF0000",
+            marker="^",
+            marker_size=8.0,
+            alpha=0.9
+        )
+        self.add_annotation(annotation)
+        return annotation
+
+    def add_base_pressure_annotation(self, x_start: float, x_end: float, pressure: float,
+                                   series_name: str = "") -> AnnotationConfig:
+        """
+        Add base pressure annotation for vacuum analysis
+        
+        Args:
+            x_start: Start X coordinate
+            x_end: End X coordinate
+            pressure: Base pressure value
+            series_name: Name of the series
+            
+        Returns:
+            Created AnnotationConfig
+        """
+        annotation = AnnotationConfig(
+            annotation_type="line",
+            text=f"Base Pressure: {pressure:.2e} ({series_name})",
+            x=x_start,
+            y=pressure,
+            x2=x_end,
+            y2=pressure,
+            color="#00AA00",
+            line_style="-",
+            alpha=0.7
+        )
+        self.add_annotation(annotation)
+        return annotation
+
+    def add_leak_annotation(self, x_start: float, x_end: float, leak_rate: float,
+                          series_name: str = "") -> AnnotationConfig:
+        """
+        Add leak rate annotation for vacuum analysis
+        
+        Args:
+            x_start: Start X coordinate
+            x_end: End X coordinate
+            leak_rate: Leak rate value
+            series_name: Name of the series
+            
+        Returns:
+            Created AnnotationConfig
+        """
+        # Calculate slope line
+        y_start = 1e-8  # Base pressure assumption
+        y_end = y_start + (leak_rate * (x_end - x_start))
+        
+        annotation = AnnotationConfig(
+            annotation_type="line",
+            text=f"Leak Rate: {leak_rate:.2e} mbar·l/s ({series_name})",
+            x=x_start,
+            y=y_start,
+            x2=x_end,
+            y2=y_end,
+            color="#FFA500",
+            line_style=":",
+            alpha=0.8
+        )
+        self.add_annotation(annotation)
+        return annotation

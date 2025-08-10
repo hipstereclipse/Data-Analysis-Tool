@@ -1,6 +1,6 @@
-#!/usr/bin/env python3
 """
-Setup script for Excel Data Plotter
+setup.py - Package setup configuration
+For distribution and installation
 """
 
 from setuptools import setup, find_packages
@@ -8,38 +8,46 @@ from setuptools import setup, find_packages
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
-with open("requirements.txt", "r", encoding="utf-8") as fh:
-    requirements = [line.strip() for line in fh if line.strip() and not line.startswith("#")]
-
 setup(
     name="excel-data-plotter",
     version="5.0.0",
     author="Professional Edition",
-    description="A comprehensive data visualization and analysis application",
+    description="Professional Multi-File Excel Data Plotter with Vacuum Analysis",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/yourusername/excel-data-plotter",
     packages=find_packages(),
     classifiers=[
-        "Development Status :: 5 - Production/Stable",
+        "Programming Language :: Python :: 3",
+        "License :: OSI Approved :: MIT License",
+        "Operating System :: OS Independent",
+        "Development Status :: 4 - Beta",
         "Intended Audience :: Science/Research",
         "Topic :: Scientific/Engineering :: Visualization",
-        "License :: OSI Approved :: MIT License",
-        "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.8",
-        "Programming Language :: Python :: 3.9",
-        "Programming Language :: Python :: 3.10",
-        "Programming Language :: Python :: 3.11",
     ],
-    python_requires=">=3.8",
-    install_requires=requirements,
+    python_requires=">=3.7",
+    install_requires=[
+        "pandas>=1.3.0",
+        "numpy>=1.21.0",
+        "matplotlib>=3.4.0",
+        "scipy>=1.7.0",
+        "scikit-learn>=0.24.0",
+        "customtkinter>=5.0.0",
+        "openpyxl>=3.0.0",
+    ],
+    extras_require={
+        "dev": [
+            "pytest>=6.0",
+            "pytest-cov>=2.0",
+            "black>=21.0",
+            "flake8>=3.9",
+        ],
+    },
     entry_points={
         "console_scripts": [
             "excel-plotter=main:main",
         ],
     },
     include_package_data=True,
-    package_data={
-        "": ["*.json", "*.yaml", "*.css", "*.html"],
-    },
+    zip_safe=False,
 )

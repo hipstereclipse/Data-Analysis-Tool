@@ -1,206 +1,302 @@
-#!/usr/bin/env python3
 """
-File management operations
+core/file_manager.py - File Manager
+Handles file operations including loading Excel/CSV files
 """
 
-import logging
-from pathlib import Path
-from typing import List, Optional, Union
 import pandas as pd
 import numpy as np
+from pathlib import Path
+from typing import Optional, Dict, List, Any, Tuple
+import logging
+import uuid
 from tkinter import filedialog
-import json
+import os
 
 from models.data_models import FileData
-from config.constants import AppConfig, FileTypes
-from utils.validators import validate_file_size, validate_dataframe
 
 logger = logging.getLogger(__name__)
 
 
 class FileManager:
-    """Handles all file operations"""
+    """
+    Manages file operations
+    Handles loading, validating, and processing data files
+    """
 
     def __init__(self):
-        self.supported_extensions = {
-            '.xlsx', '.xls', '.xlsm', '.csv', '.tsv'
-        }
-        self.encoding_options = ['utf-8', 'latin1', 'cp1252']
+        """Initialize file manager"""
+        self.supported_extensions = ['.xlsx', '.xls', '.xlsm', '.xlsb', '.csv', '.tsv', '.txt']
+        self.max_file_size = 500 * 1024 * 1024  # 500 MB
 
-    def select_files(self) -> List[str]:
-        """Open file selection dialog"""
-        filetypes = [
-            (FileTypes.EXCEL.description, " ".join(FileTypes.EXCEL.extensions)),
-            (FileTypes.CSV.description, " ".join(FileTypes.CSV.extensions)),
-            ("All Files", "*.*")
-        ]
+    def load_file(self, filepath: str, sheet_name: Optional[str] = None) -> Optional[FileData]:
+        """
+        Load a data file
 
-        files = filedialog.askopenfilenames(
-            title="Select Data Files",
-            filetypes=filetypes
-        )
+        Args:
+            filepath: Path to the file
+            sheet_name: Specific sheet for Excel files
 
-        return list(files)
-
-    def open_file_dialog(self, title: str, filetypes: List[tuple]) -> Optional[str]:
-        """Open single file dialog"""
-        return filedialog.askopenfilename(
-            title=title,
-            filetypes=filetypes
-        )
-
-    def save_file_dialog(self, title: str, filetypes: List[tuple]) -> Optional[str]:
-        """Save file dialog"""
-        return filedialog.asksaveasfilename(
-            title=title,
-            filetypes=filetypes,
-            defaultextension=filetypes[0][1].split('*')[1]
-        )
-
-    def load_file(self, filepath: Union[str, Path]) -> FileData:
-        """Load a data file"""
-        filepath = Path(filepath)
-
-        # Validate file
-        if not filepath.exists():
-            raise FileNotFoundError(f"File not found: {filepath}")
-
-        if not validate_file_size(filepath, AppConfig.MAX_FILE_SIZE_MB):
-            raise ValueError(f"File too large (max {AppConfig.MAX_FILE_SIZE_MB}MB)")
-
-        # Load based on extension
-        ext = filepath.suffix.lower()
-
-        if ext in ['.xlsx', '.xls', '.xlsm']:
-            df = self._load_excel(filepath)
-        elif ext in ['.csv', '.tsv']:
-            df = self._load_csv(filepath)
-        else:
-            raise ValueError(f"Unsupported file type: {ext}")
-
-        # Validate dataframe
-        validate_dataframe(df)
-
-        # Clean and prepare dataframe
-        df = self._prepare_dataframe(df)
-
-        logger.info(f"Loaded file: {filepath.name} ({len(df)} rows, {len(df.columns)} columns)")
-
-        return FileData(str(filepath), df)
-
-    def _load_excel(self, filepath: Path) -> pd.DataFrame:
-        """Load Excel file"""
+        Returns:
+            FileData object if successful, None otherwise
+        """
         try:
-            # Try to read with openpyxl engine first
-            excel_file = pd.ExcelFile(filepath, engine='openpyxl')
+            path = Path(filepath)
 
-            # If multiple sheets, use first with data
-            if len(excel_file.sheet_names) > 1:
-                for sheet in excel_file.sheet_names:
-                    df = pd.read_excel(excel_file, sheet_name=sheet)
-                    if not df.empty:
-                        logger.info(f"Using sheet: {sheet}")
-                        return df
+            # Validate file
+            if not path.exists():
+                logger.error(f"File not found: {filepath}")
+                return None
 
-            # Default to first sheet
-            return pd.read_excel(excel_file, sheet_name=0)
+            if path.stat().st_size > self.max_file_size:
+                logger.error(f"File too large: {filepath}")
+                return None
+
+            # Determine file type and load
+            ext = path.suffix.lower()
+
+            if ext in ['.xlsx', '.xls', '.xlsm', '.xlsb']:
+                file_data = self.load_excel_file(filepath, sheet_name)
+            elif ext in ['.csv', '.tsv', '.txt']:
+                file_data = self.load_csv_file(filepath)
+            else:
+                logger.error(f"Unsupported file type: {ext}")
+                return None
+
+            return file_data
 
         except Exception as e:
-            # Fallback to default engine
-            logger.warning(f"Openpyxl failed, trying default: {e}")
-            return pd.read_excel(filepath)
+            logger.error(f"Failed to load file {filepath}: {e}")
+            return None
 
-    def _load_csv(self, filepath: Path) -> pd.DataFrame:
-        """Load CSV file with encoding detection"""
-        # Try different encodings
-        for encoding in self.encoding_options:
-            try:
-                return pd.read_csv(
-                    filepath,
-                    encoding=encoding,
-                    sep=None,  # Auto-detect separator
-                    engine='python',
-                    on_bad_lines='skip'
-                )
-            except UnicodeDecodeError:
-                continue
+    def load_excel_file(self, filepath: str, sheet_name: Optional[str] = None) -> Optional[FileData]:
+        """
+        Load an Excel file
 
-        # If all encodings fail, use latin1 (accepts all bytes)
-        return pd.read_csv(filepath, encoding='latin1', on_bad_lines='skip')
+        Args:
+            filepath: Path to Excel file
+            sheet_name: Specific sheet to load
 
-    def _prepare_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Clean and prepare dataframe"""
-        # Remove completely empty rows and columns
-        df = df.dropna(how='all')
-        df = df.dropna(axis=1, how='all')
-
-        # Clean column names
-        df.columns = [self._clean_column_name(col) for col in df.columns]
-
-        # Convert obvious datetime columns
-        for col in df.columns:
-            if self._is_datetime_column(df[col]):
-                try:
-                    df[col] = pd.to_datetime(df[col], errors='coerce')
-                except:
-                    pass
-
-        # Convert obvious numeric columns
-        for col in df.columns:
-            if df[col].dtype == 'object':
-                try:
-                    # Try numeric conversion
-                    numeric = pd.to_numeric(df[col], errors='coerce')
-                    if numeric.notna().sum() / len(df) > 0.5:  # >50% valid
-                        df[col] = numeric
-                except:
-                    pass
-
-        return df
-
-    def _clean_column_name(self, name: str) -> str:
-        """Clean column name"""
-        if pd.isna(name):
-            return "Unnamed"
-
-        name = str(name).strip()
-        # Remove problematic characters
-        for char in ['\\n', '\\r', '\\t']:
-            name = name.replace(char, ' ')
-
-        # Collapse multiple spaces
-        while '  ' in name:
-            name = name.replace('  ', ' ')
-
-        return name if name else "Unnamed"
-
-    def _is_datetime_column(self, series: pd.Series) -> bool:
-        """Check if series contains datetime data"""
-        if pd.api.types.is_datetime64_any_dtype(series):
-            return True
-
-        # Sample check for string dates
-        sample = series.dropna().head(10)
-        if len(sample) == 0:
-            return False
-
+        Returns:
+            FileData object if successful
+        """
         try:
-            pd.to_datetime(sample, errors='coerce')
-            return True
-        except:
-            return False
+            path = Path(filepath)
 
-    def export_dataframe(self, df: pd.DataFrame, filepath: Union[str, Path]):
-        """Export dataframe to file"""
-        filepath = Path(filepath)
-        ext = filepath.suffix.lower()
+            # Read Excel file
+            excel_file = pd.ExcelFile(filepath)
 
-        if ext == '.csv':
-            df.to_csv(filepath, index=False)
-        elif ext in ['.xlsx', '.xls']:
-            with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
-                df.to_excel(writer, index=False, sheet_name='Data')
-        else:
-            raise ValueError(f"Unsupported export format: {ext}")
+            # Get all sheets
+            sheets = {}
 
-        logger.info(f"Exported data to: {filepath}")
+            if sheet_name:
+                # Load specific sheet
+                df = pd.read_excel(excel_file, sheet_name=sheet_name)
+                sheets[sheet_name] = df
+                main_df = df
+            else:
+                # Load all sheets
+                for name in excel_file.sheet_names:
+                    sheets[name] = pd.read_excel(excel_file, sheet_name=name)
+
+                # Use first sheet as main dataframe
+                main_df = sheets[excel_file.sheet_names[0]]
+
+            # Create FileData object
+            file_data = FileData(
+                filepath=str(path),
+                data=main_df,
+                filename=path.name
+            )
+            
+            # Set additional properties
+            file_data.file_size = path.stat().st_size
+            file_data.sheet_name = sheet_name or excel_file.sheet_names[0]
+            
+            # Store sheets info (if needed for future use)
+            file_data.sheets = sheets
+
+            logger.info(f"Loaded Excel file: {path.name} with {len(sheets)} sheet(s)")
+            return file_data
+
+        except Exception as e:
+            logger.error(f"Failed to load Excel file: {e}")
+            return None
+
+    def load_csv_file(self, filepath: str) -> Optional[FileData]:
+        """
+        Load a CSV file
+
+        Args:
+            filepath: Path to CSV file
+
+        Returns:
+            FileData object if successful
+        """
+        try:
+            path = Path(filepath)
+
+            # Try to detect delimiter
+            with open(filepath, 'r') as f:
+                first_line = f.readline()
+                if '\t' in first_line:
+                    delimiter = '\t'
+                elif ',' in first_line:
+                    delimiter = ','
+                elif ';' in first_line:
+                    delimiter = ';'
+                else:
+                    delimiter = ','
+
+            # Read CSV
+            df = pd.read_csv(filepath, delimiter=delimiter)
+
+            # Create FileData object
+            file_data = FileData(
+                filepath=str(path),
+                data=df,
+                filename=path.name
+            )
+            
+            # Set additional properties
+            file_data.file_size = path.stat().st_size
+
+            logger.info(f"Loaded CSV file: {path.name} with {len(df)} rows")
+            return file_data
+
+        except Exception as e:
+            logger.error(f"Failed to load CSV file: {e}")
+            return None
+
+    def save_dataframe(self, df: pd.DataFrame, filepath: str, **kwargs):
+        """
+        Save a dataframe to file
+
+        Args:
+            df: DataFrame to save
+            filepath: Path to save to
+            **kwargs: Additional arguments for to_excel/to_csv
+        """
+        try:
+            path = Path(filepath)
+            ext = path.suffix.lower()
+
+            if ext in ['.xlsx', '.xls']:
+                df.to_excel(filepath, index=False, **kwargs)
+            elif ext in ['.csv', '.tsv', '.txt']:
+                delimiter = '\t' if ext == '.tsv' else ','
+                df.to_csv(filepath, index=False, sep=delimiter, **kwargs)
+            else:
+                raise ValueError(f"Unsupported file type: {ext}")
+
+            logger.info(f"Saved dataframe to {filepath}")
+
+        except Exception as e:
+            logger.error(f"Failed to save dataframe: {e}")
+            raise
+
+    def open_file_dialog(self, title: str = "Select File",
+                         filetypes: List[Tuple[str, str]] = None) -> Optional[str]:
+        """
+        Open file selection dialog
+
+        Args:
+            title: Dialog title
+            filetypes: List of (description, pattern) tuples
+
+        Returns:
+            Selected filepath or None
+        """
+        if not filetypes:
+            filetypes = [
+                ("Excel files", "*.xlsx *.xls *.xlsm"),
+                ("CSV files", "*.csv *.tsv"),
+                ("All files", "*.*")
+            ]
+
+        filepath = filedialog.askopenfilename(title=title, filetypes=filetypes)
+        return filepath if filepath else None
+
+    def open_files_dialog(self, title: str = "Select Files",
+                          filetypes: List[Tuple[str, str]] = None) -> List[str]:
+        """
+        Open multiple file selection dialog
+
+        Args:
+            title: Dialog title
+            filetypes: List of (description, pattern) tuples
+
+        Returns:
+            List of selected filepaths
+        """
+        if not filetypes:
+            filetypes = [
+                ("Excel files", "*.xlsx *.xls *.xlsm"),
+                ("CSV files", "*.csv *.tsv"),
+                ("All files", "*.*")
+            ]
+
+        filepaths = filedialog.askopenfilenames(title=title, filetypes=filetypes)
+        return list(filepaths) if filepaths else []
+
+    def save_file_dialog(self, title: str = "Save File",
+                         defaultextension: str = ".xlsx",
+                         filetypes: List[Tuple[str, str]] = None) -> Optional[str]:
+        """
+        Open save file dialog
+
+        Args:
+            title: Dialog title
+            defaultextension: Default file extension
+            filetypes: List of (description, pattern) tuples
+
+        Returns:
+            Selected filepath or None
+        """
+        if not filetypes:
+            filetypes = [
+                ("Excel files", "*.xlsx"),
+                ("CSV files", "*.csv"),
+                ("All files", "*.*")
+            ]
+
+        filepath = filedialog.asksaveasfilename(
+            title=title,
+            defaultextension=defaultextension,
+            filetypes=filetypes
+        )
+        return filepath if filepath else None
+
+    def validate_file(self, filepath: str) -> Tuple[bool, str]:
+        """
+        Validate a file for loading
+
+        Args:
+            filepath: Path to file
+
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        try:
+            path = Path(filepath)
+
+            if not path.exists():
+                return False, "File does not exist"
+
+            if not path.is_file():
+                return False, "Path is not a file"
+
+            if path.stat().st_size == 0:
+                return False, "File is empty"
+
+            if path.stat().st_size > self.max_file_size:
+                size_mb = path.stat().st_size / (1024 * 1024)
+                return False, f"File too large ({size_mb:.1f} MB)"
+
+            ext = path.suffix.lower()
+            if ext not in self.supported_extensions:
+                return False, f"Unsupported file type: {ext}"
+
+            return True, ""
+
+        except Exception as e:
+            return False, str(e)

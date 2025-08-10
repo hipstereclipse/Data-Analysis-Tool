@@ -1,361 +1,353 @@
 #!/usr/bin/env python3
 """
-Project save/load functionality
+core/project_manager.py - Project Manager
+Handles project saving, loading, and management
 """
 
-import logging
 import json
-from pathlib import Path
-from typing import Dict, Any, Optional, List
-from datetime import datetime
 import pickle
-import gzip
+from pathlib import Path
+from typing import Optional, Dict, List
+import logging
+from datetime import datetime
+import uuid
 
-from models.project_models import Project
-from models.data_models import FileData, SeriesConfig, AnnotationConfig
+from models.project_models import Project, ProjectMetadata, RecentProjects
+from models.data_models import FileData, SeriesConfig, AnnotationConfig, PlotConfiguration
+from core.file_manager import FileManager
 
 logger = logging.getLogger(__name__)
 
 
 class ProjectManager:
-    """Manages project persistence"""
+    """
+    Manages project operations including saving and loading
+    """
 
     def __init__(self):
-        self.current_project_path: Optional[Path] = None
-        self.autosave_enabled = False
-        self.compression_enabled = True
+        """Initialize project manager"""
+        self.file_manager = FileManager()
+        self.recent_projects = RecentProjects()
+        self.current_project: Optional[Project] = None
+        self.project_modified = False
 
-    def save_project(self, project: Project, filepath: str):
+    def create_new_project(self, name: str = "Untitled Project") -> Project:
+        """
+        Create a new project
+
+        Args:
+            name: Project name
+
+        Returns:
+            New Project object
+        """
+        project = Project(
+            project_id=str(uuid.uuid4())[:8],
+            name=name,
+            created_date=datetime.now(),
+            modified_date=datetime.now()
+        )
+
+        self.current_project = project
+        self.project_modified = False
+
+        logger.info(f"Created new project: {name}")
+        return project
+
+    def save_project(self, project: Project, filepath: str) -> bool:
         """
         Save project to file
 
         Args:
-            project: Project object to save
-            filepath: Target file path
+            project: Project to save
+            filepath: Path to save file
+
+        Returns:
+            True if successful
         """
-        filepath = Path(filepath)
-
-        # Ensure .edp extension
-        if filepath.suffix != '.edp':
-            filepath = filepath.with_suffix('.edp')
-
         try:
-            # Prepare project data
-            project_dict = self._project_to_dict(project)
+            path = Path(filepath)
 
-            # Add metadata
-            project_dict['metadata'] = {
-                'version': project.version,
-                'created_at': project.created_at.isoformat(),
-                'modified_at': datetime.now().isoformat(),
-                'application': 'Excel Data Plotter',
-                'app_version': '5.0.0'
-            }
+            # Ensure .edp extension
+            if path.suffix.lower() != '.edp':
+                path = path.with_suffix('.edp')
 
-            # Save with compression if enabled
-            if self.compression_enabled:
-                with gzip.open(filepath, 'wt', encoding='utf-8') as f:
-                    json.dump(project_dict, f, indent=2)
-            else:
-                with open(filepath, 'w', encoding='utf-8') as f:
-                    json.dump(project_dict, f, indent=2)
+            # Update modified date
+            project.update_modified_date()
 
-            self.current_project_path = filepath
-            logger.info(f"Project saved to: {filepath}")
+            # Create project data dictionary
+            project_data = project.to_dict()
+
+            # Save file data separately (in same directory)
+            data_dir = path.parent / f"{path.stem}_data"
+            data_dir.mkdir(exist_ok=True)
+
+            # Save each file's data
+            for file_id, file_data in project.files.items():
+                data_file = data_dir / f"{file_id}.pkl"
+                with open(data_file, 'wb') as f:
+                    pickle.dump(file_data, f)
+
+            # Save project metadata
+            with open(path, 'w') as f:
+                json.dump(project_data, f, indent=2)
+
+            # Update recent projects
+            metadata = ProjectMetadata.from_project(project, str(path))
+            self.recent_projects.add_project(metadata)
+
+            self.project_modified = False
+            logger.info(f"Saved project to {path}")
+
+            return True
 
         except Exception as e:
             logger.error(f"Failed to save project: {e}")
-            raise
+            return False
 
-    def load_project(self, filepath: str) -> Project:
+    def load_project(self, filepath: str) -> Optional[Project]:
         """
         Load project from file
 
         Args:
-            filepath: Project file path
+            filepath: Path to project file
 
         Returns:
-            Loaded Project object
+            Project object if successful
         """
-        filepath = Path(filepath)
-
-        if not filepath.exists():
-            raise FileNotFoundError(f"Project file not found: {filepath}")
-
         try:
-            # Try to load with compression first
-            try:
-                with gzip.open(filepath, 'rt', encoding='utf-8') as f:
-                    project_dict = json.load(f)
-            except:
-                # Fallback to uncompressed
-                with open(filepath, 'r', encoding='utf-8') as f:
-                    project_dict = json.load(f)
+            path = Path(filepath)
 
-            # Create Project object
-            project = self._dict_to_project(project_dict)
+            if not path.exists():
+                logger.error(f"Project file not found: {filepath}")
+                return None
 
-            self.current_project_path = filepath
-            logger.info(f"Project loaded from: {filepath}")
+            # Load project metadata
+            with open(path, 'r') as f:
+                project_data = json.load(f)
 
+            # Create project from data
+            project = Project.from_dict(project_data)
+
+            # Load file data
+            data_dir = path.parent / f"{path.stem}_data"
+
+            if data_dir.exists():
+                for file_ref in project_data.get('file_references', {}).values():
+                    file_id = file_ref['file_id']
+                    data_file = data_dir / f"{file_id}.pkl"
+
+                    if data_file.exists():
+                        with open(data_file, 'rb') as f:
+                            file_data = pickle.load(f)
+                            project.files[file_id] = file_data
+                    else:
+                        # Try to reload from original path
+                        original_path = file_ref['filepath']
+                        if Path(original_path).exists():
+                            file_data = self.file_manager.load_file(original_path)
+                            if file_data:
+                                file_data.file_id = file_id
+                                project.files[file_id] = file_data
+
+            # Update recent projects
+            metadata = ProjectMetadata.from_project(project, str(path))
+            self.recent_projects.add_project(metadata)
+
+            self.current_project = project
+            self.project_modified = False
+
+            logger.info(f"Loaded project from {path}")
             return project
 
         except Exception as e:
             logger.error(f"Failed to load project: {e}")
-            raise
+            return None
 
-    def _project_to_dict(self, project: Project) -> Dict[str, Any]:
-        """Convert Project object to dictionary"""
-        return {
-            'name': project.name,
-            'description': project.description,
-            'files': self._serialize_files(project.files),
-            'series': self._serialize_series(project.series),
-            'annotations': self._serialize_annotations(project.annotations),
-            'config': project.config
-        }
+    def export_project(self, project: Project, filepath: str,
+                       include_data: bool = True) -> bool:
+        """
+        Export project to a portable format
 
-    def _dict_to_project(self, data: Dict[str, Any]) -> Project:
-        """Convert dictionary to Project object"""
-        project = Project(
-            name=data.get('name', 'Untitled'),
-            description=data.get('description', '')
-        )
+        Args:
+            project: Project to export
+            filepath: Path to export file
+            include_data: Whether to include data files
 
-        # Restore files
-        project.files = self._deserialize_files(data.get('files', {}))
+        Returns:
+            True if successful
+        """
+        try:
+            import zipfile
 
-        # Restore series
-        project.series = self._deserialize_series(data.get('series', {}))
+            path = Path(filepath)
 
-        # Restore annotations
-        project.annotations = self._deserialize_annotations(data.get('annotations', {}))
+            # Ensure .zip extension for export
+            if path.suffix.lower() != '.zip':
+                path = path.with_suffix('.zip')
 
-        # Restore config
-        project.config = data.get('config', {})
+            with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                # Save project metadata
+                project_data = project.to_dict()
+                zipf.writestr('project.json', json.dumps(project_data, indent=2))
 
-        # Restore metadata if available
-        if 'metadata' in data:
-            metadata = data['metadata']
-            if 'created_at' in metadata:
-                project.created_at = datetime.fromisoformat(metadata['created_at'])
-            if 'version' in metadata:
-                project.version = metadata['version']
+                # Save data files if requested
+                if include_data:
+                    for file_id, file_data in project.files.items():
+                        # Save as CSV for portability
+                        csv_data = file_data.data.to_csv(index=False)
+                        zipf.writestr(f"data/{file_id}.csv", csv_data)
 
-        return project
+                # Save summary
+                summary = project.get_summary()
+                zipf.writestr('README.txt', summary)
 
-    def _serialize_files(self, files: Dict[str, FileData]) -> Dict[str, Any]:
-        """Serialize file data for saving"""
-        serialized = {}
+            logger.info(f"Exported project to {path}")
+            return True
 
-        for file_id, file_data in files.items():
-            # Save file reference and minimal data
-            serialized[file_id] = {
-                'id': file_id,
-                'filepath': file_data.filepath,
-                'filename': file_data.filename,
-                'load_time': file_data.load_time.isoformat(),
-                'metadata': file_data.metadata,
-                # Option to embed small datasets
-                'embedded': False
-            }
+        except Exception as e:
+            logger.error(f"Failed to export project: {e}")
+            return False
 
-            # For small files, optionally embed data
-            if file_data.metadata['rows'] < 1000:
-                serialized[file_id]['embedded'] = True
-                serialized[file_id]['data'] = file_data.dataframe.to_dict('records')
+    def import_project(self, filepath: str) -> Optional[Project]:
+        """
+        Import project from exported format
 
-        return serialized
+        Args:
+            filepath: Path to exported project file
 
-    def _deserialize_files(self, data: Dict[str, Any]) -> Dict[str, FileData]:
-        """Deserialize file data"""
-        import pandas as pd
+        Returns:
+            Project object if successful
+        """
+        try:
+            import zipfile
 
-        files = {}
+            path = Path(filepath)
 
-        for file_id, file_dict in data.items():
-            filepath = file_dict['filepath']
+            with zipfile.ZipFile(path, 'r') as zipf:
+                # Load project metadata
+                project_json = zipf.read('project.json').decode('utf-8')
+                project_data = json.loads(project_json)
 
-            # Check if data is embedded
-            if file_dict.get('embedded') and 'data' in file_dict:
-                # Use embedded data
-                df = pd.DataFrame(file_dict['data'])
-                file_data = FileData(filepath, df)
-            else:
-                # Load from file path
-                if Path(filepath).exists():
-                    from core.file_manager import FileManager
-                    fm = FileManager()
-                    try:
-                        file_data = fm.load_file(filepath)
-                    except Exception as e:
-                        logger.warning(f"Could not load file {filepath}: {e}")
-                        # Create placeholder
-                        df = pd.DataFrame()
-                        file_data = FileData(filepath, df)
-                else:
-                    logger.warning(f"File not found: {filepath}")
-                    # Create placeholder
-                    df = pd.DataFrame()
-                    file_data = FileData(filepath, df)
+                # Create project
+                project = Project.from_dict(project_data)
 
-            # Restore ID and metadata
-            file_data.id = file_id
-            if 'load_time' in file_dict:
-                file_data.load_time = datetime.fromisoformat(file_dict['load_time'])
+                # Load data files
+                for name in zipf.namelist():
+                    if name.startswith('data/') and name.endswith('.csv'):
+                        file_id = Path(name).stem
+                        csv_data = zipf.read(name).decode('utf-8')
 
-            files[file_id] = file_data
+                        # Create DataFrame from CSV
+                        import io
+                        df = pd.read_csv(io.StringIO(csv_data))
 
-        return files
+                        # Create FileData object
+                        file_ref = project_data['file_references'].get(file_id, {})
+                        file_data = FileData(
+                            file_id=file_id,
+                            filepath="imported",
+                            filename=file_ref.get('filename', f"file_{file_id}"),
+                            data=df
+                        )
 
-    def _serialize_series(self, series: Dict[str, SeriesConfig]) -> Dict[str, Any]:
-        """Serialize series configurations"""
-        serialized = {}
+                        project.files[file_id] = file_data
 
-        for series_id, series_config in series.items():
-            serialized[series_id] = {
-                'id': series_id,
-                'name': series_config.name,
-                'file_id': series_config.file_id,
-                'x_column': series_config.x_column,
-                'y_column': series_config.y_column,
-                'start_index': series_config.start_index,
-                'end_index': series_config.end_index,
-                'color': series_config.color,
-                'line_style': series_config.line_style,
-                'line_width': series_config.line_width,
-                'marker': series_config.marker,
-                'marker_size': series_config.marker_size,
-                'alpha': series_config.alpha,
-                'visible': series_config.visible,
-                'show_in_legend': series_config.show_in_legend,
-                'legend_label': series_config.legend_label,
-                'missing_data_method': series_config.missing_data_method,
-                'smoothing_enabled': series_config.smoothing_enabled,
-                'smoothing_window': series_config.smoothing_window,
-                'show_trendline': series_config.show_trendline,
-                'trend_type': series_config.trend_type,
-                'trend_order': series_config.trend_order,
-                'show_statistics': series_config.show_statistics,
-                'show_peaks': series_config.show_peaks,
-                'peak_prominence': series_config.peak_prominence
-            }
+            logger.info(f"Imported project from {path}")
+            return project
 
-        return serialized
+        except Exception as e:
+            logger.error(f"Failed to import project: {e}")
+            return None
 
-    def _deserialize_series(self, data: Dict[str, Any]) -> Dict[str, SeriesConfig]:
-        """Deserialize series configurations"""
-        series = {}
+    def get_recent_projects(self) -> List[ProjectMetadata]:
+        """Get list of recent projects"""
+        return self.recent_projects.get_recent()
 
-        for series_id, series_dict in data.items():
-            series_config = SeriesConfig(
-                name=series_dict['name'],
-                file_id=series_dict['file_id'],
-                x_column=series_dict['x_column'],
-                y_column=series_dict['y_column']
-            )
+    def clear_recent_projects(self):
+        """Clear recent projects list"""
+        self.recent_projects.clear()
 
-            # Restore all properties
-            series_config.id = series_id
-            for key, value in series_dict.items():
-                if hasattr(series_config, key):
-                    setattr(series_config, key, value)
+    def autosave_project(self, project: Project) -> bool:
+        """
+        Autosave project to temporary location
 
-            series[series_id] = series_config
+        Args:
+            project: Project to autosave
 
-        return series
+        Returns:
+            True if successful
+        """
+        try:
+            # Create autosave directory
+            autosave_dir = Path.home() / '.excel_data_plotter' / 'autosave'
+            autosave_dir.mkdir(parents=True, exist_ok=True)
 
-    def _serialize_annotations(self, annotations: Dict[str, AnnotationConfig]) -> List[Dict[str, Any]]:
-        """Serialize annotations"""
-        serialized = []
+            # Create autosave filename
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            autosave_file = autosave_dir / f"autosave_{project.project_id}_{timestamp}.edp"
 
-        for ann_id, ann in annotations.items():
-            serialized.append({
-                'id': ann_id,
-                'type': ann.type,
-                'label': ann.label,
-                'color': ann.color,
-                'alpha': ann.alpha,
-                'line_width': ann.line_width,
-                'line_style': ann.line_style,
-                'x_data': ann.x_data,
-                'y_data': ann.y_data,
-                'x_end': ann.x_end,
-                'y_end': ann.y_end,
-                'text': ann.text,
-                'fontsize': ann.fontsize,
-                'visible': ann.visible
-            })
+            # Save project
+            success = self.save_project(project, str(autosave_file))
 
-        return serialized
+            if success:
+                # Clean old autosaves (keep last 5)
+                autosaves = sorted(autosave_dir.glob(f"autosave_{project.project_id}_*.edp"))
+                if len(autosaves) > 5:
+                    for old_file in autosaves[:-5]:
+                        try:
+                            old_file.unlink()
+                            # Also remove data directory
+                            data_dir = old_file.parent / f"{old_file.stem}_data"
+                            if data_dir.exists():
+                                import shutil
+                                shutil.rmtree(data_dir)
+                        except:
+                            pass
 
-    def _deserialize_annotations(self, data: List[Dict[str, Any]]) -> Dict[str, AnnotationConfig]:
-        """Deserialize annotations"""
-        annotations = {}
+            return success
 
-        for ann_dict in data:
-            ann = AnnotationConfig(
-                type=ann_dict['type'],
-                label=ann_dict.get('label', ''),
-                color=ann_dict.get('color', 'red'),
-                alpha=ann_dict.get('alpha', 0.7),
-                line_width=ann_dict.get('line_width', 2),
-                line_style=ann_dict.get('line_style', '-'),
-                x_data=ann_dict.get('x_data'),
-                y_data=ann_dict.get('y_data'),
-                x_end=ann_dict.get('x_end'),
-                y_end=ann_dict.get('y_end'),
-                text=ann_dict.get('text'),
-                fontsize=ann_dict.get('fontsize', 10),
-                visible=ann_dict.get('visible', True)
-            )
+        except Exception as e:
+            logger.error(f"Failed to autosave project: {e}")
+            return False
 
-            if 'id' in ann_dict:
-                ann.id = ann_dict['id']
-                annotations[ann.id] = ann
-            else:
-                annotations[ann.id] = ann
+    def recover_autosave(self, project_id: str) -> Optional[Project]:
+        """
+        Recover project from autosave
 
-        return annotations
+        Args:
+            project_id: Project ID to recover
 
-    def export_project_summary(self, project: Project, filepath: str):
-        """Export project summary as text"""
-        filepath = Path(filepath)
+        Returns:
+            Recovered project if found
+        """
+        try:
+            autosave_dir = Path.home() / '.excel_data_plotter' / 'autosave'
 
-        summary = []
-        summary.append(f"PROJECT SUMMARY: {project.name}")
-        summary.append("=" * 60)
-        summary.append(f"Created: {project.created_at}")
-        summary.append(f"Description: {project.description}")
-        summary.append("")
+            if not autosave_dir.exists():
+                return None
 
-        summary.append("FILES:")
-        summary.append("-" * 40)
-        for file_data in project.files.values():
-            summary.append(f"  • {file_data.filename}")
-            summary.append(f"    Path: {file_data.filepath}")
-            summary.append(f"    Size: {file_data.metadata['rows']} × {file_data.metadata['columns']}")
-        summary.append("")
+            # Find most recent autosave
+            autosaves = sorted(autosave_dir.glob(f"autosave_{project_id}_*.edp"))
 
-        summary.append("SERIES:")
-        summary.append("-" * 40)
-        for series in project.series.values():
-            file_name = "Unknown"
-            if series.file_id in project.files:
-                file_name = project.files[series.file_id].filename
+            if autosaves:
+                latest = autosaves[-1]
+                logger.info(f"Recovering from autosave: {latest}")
+                return self.load_project(str(latest))
 
-            summary.append(f"  • {series.name}")
-            summary.append(f"    File: {file_name}")
-            summary.append(f"    Data: {series.x_column} vs {series.y_column}")
-            summary.append(f"    Visible: {series.visible}")
-        summary.append("")
+            return None
 
-        summary.append("ANNOTATIONS:")
-        summary.append("-" * 40)
-        summary.append(f"  Total: {len(project.annotations)}")
+        except Exception as e:
+            logger.error(f"Failed to recover autosave: {e}")
+            return None
 
-        # Write summary
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write("\n".join(summary))
+    def mark_modified(self):
+        """Mark current project as modified"""
+        self.project_modified = True
+        if self.current_project:
+            self.current_project.update_modified_date()
 
-        logger.info(f"Project summary exported to: {filepath}")
+    def is_modified(self) -> bool:
+        """Check if current project has unsaved changes"""
+        return self.project_modified
+

@@ -1,17 +1,81 @@
-#!/usr/bin/env python3
+# config/settings.py
+
+# !/usr/bin/env python3
 """
-Application settings management
+User settings management
+Handles loading and saving user preferences
 """
 
 import json
-import logging
-from pathlib import Path
-from typing import Dict, Any, Optional
 from dataclasses import dataclass, field, asdict
+from pathlib import Path
+from typing import Dict, Any, Optional, List
+import logging
 
 logger = logging.getLogger(__name__)
 
 
+class Settings:
+    """
+    Manages user settings and preferences
+    """
+
+    def __init__(self):
+        """Initialize settings manager"""
+        self.settings_file = Path.home() / '.excel_data_plotter' / 'settings.json'
+        self.settings = self.load_settings()
+
+    def load_settings(self) -> Dict[str, Any]:
+        """Load settings from file"""
+        default_settings = {
+            'theme': 'dark',
+            'auto_refresh': True,
+            'confirm_delete': True,
+            'show_tooltips': True,
+            'recent_files_count': 10,
+            'autosave_interval': 300,
+            'default_plot_type': 'line',
+            'default_export_format': 'png',
+            'default_export_dpi': 300,
+            'window_geometry': None,
+            'last_directory': str(Path.home()),
+            'show_welcome': True,
+            'check_updates': True
+        }
+
+        try:
+            if self.settings_file.exists():
+                with open(self.settings_file, 'r') as f:
+                    user_settings = json.load(f)
+                    # Merge with defaults
+                    default_settings.update(user_settings)
+        except Exception as e:
+            logger.warning(f"Failed to load settings: {e}")
+
+        return default_settings
+
+    def save_settings(self):
+        """Save settings to file"""
+        try:
+            self.settings_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.settings_file, 'w') as f:
+                json.dump(self.settings, f, indent=2)
+        except Exception as e:
+            logger.error(f"Failed to save settings: {e}")
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Get a setting value"""
+        return self.settings.get(key, default)
+
+    def set(self, key: str, value: Any):
+        """Set a setting value"""
+        self.settings[key] = value
+        self.save_settings()
+
+    def reset_to_defaults(self):
+        """Reset all settings to defaults"""
+        self.settings = self.load_settings()
+        self.save_settings()
 @dataclass
 class UserSettings:
     """User preferences and settings"""

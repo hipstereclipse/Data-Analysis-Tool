@@ -1,451 +1,677 @@
 #!/usr/bin/env python3
 """
-Plot generation and management
+Plot Manager for Excel Data Plotter
+Handles all plotting operations including series rendering and styling
 """
 
-import logging
-from typing import List, Dict, Any, Optional
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 import matplotlib.dates as mdates
 from scipy.signal import savgol_filter
-from scipy.interpolate import make_interp_spline
+from scipy import stats
+from sklearn.linear_model import LinearRegression
+import logging
+from typing import Dict, List, Optional, Tuple, Any
 
-from models.data_models import FileData, SeriesConfig
-from config.constants import PlotConfig, PlotTypes, MissingDataMethods, TrendTypes
-from analysis.statistical import StatisticalAnalyzer
-from utils.helpers import detect_datetime_axis
+from config.constants import PlotTypes, MissingDataMethods, TrendTypes
+from models.data_models import SeriesConfig, PlotConfiguration, FileData
 
 logger = logging.getLogger(__name__)
 
 
 class PlotManager:
-    """Manages plot creation and configuration"""
+    """
+    Manages plot creation, updating, and configuration
+    Handles all matplotlib operations for the application
+    """
 
     def __init__(self):
+        """Initialize plot manager"""
+        # Current figure and axes
         self.figure: Optional[Figure] = None
-        self.axes: Optional[Any] = None
-        self.current_config: Dict[str, Any] = {}
-        self.color_cycle = plt.cm.tab10.colors
+        self.axes: Optional[plt.Axes] = None
+        self.canvas: Optional[FigureCanvasTkAgg] = None
+        self.toolbar: Optional[NavigationToolbar2Tk] = None
 
-    def create_plot(
-            self,
-            series_list: List[SeriesConfig],
-            files: Dict[str, FileData],
-            config: Dict[str, Any]
-    ) -> Figure:
-        """Create plot from series configurations"""
+        # Secondary y-axis if needed
+        self.axes2: Optional[plt.Axes] = None
 
-        # Store configuration
-        self.current_config = config
+        # Plot configuration
+        self.plot_config = PlotConfiguration()
 
-        # Create figure
-        self.figure = Figure(
-            figsize=(config.get('fig_width', PlotConfig.FIGURE_WIDTH),
-                     config.get('fig_height', PlotConfig.FIGURE_HEIGHT)),
-            dpi=config.get('dpi', PlotConfig.DPI)
-        )
+        # Track plotted series for updates
+        self.plotted_series: Dict[str, Any] = {}
 
-        # Apply theme
-        self._apply_theme(config.get('theme', 'default'))
+        # Color cycle
+        self.color_cycle = plt.cm.get_cmap('tab10')
+        self.color_index = 0
+
+    def create_figure(self, parent_widget=None, width: float = 14, height: float = 9, dpi: int = 100) -> Tuple[
+        Figure, FigureCanvasTkAgg, NavigationToolbar2Tk]:
+        """
+        Create a new matplotlib figure with canvas and toolbar
+
+        Args:
+            parent_widget: Parent tkinter widget for canvas
+            width: Figure width in inches
+            height: Figure height in inches
+            dpi: Dots per inch resolution
+
+        Returns:
+            Tuple of (figure, canvas, toolbar)
+        """
+        # Close existing figure if any
+        if self.figure:
+            plt.close(self.figure)
+
+        # Create new figure
+        self.figure = Figure(figsize=(width, height), dpi=dpi, tight_layout=True)
+        self.figure.patch.set_facecolor('white')
 
         # Create axes
         self.axes = self.figure.add_subplot(111)
+        self.axes2 = None  # Reset secondary axis
 
-        # Plot each series
-        for i, series in enumerate(series_list):
-            if not series.visible:
-                continue
+        # Create canvas if parent widget provided
+        if parent_widget:
+            self.canvas = FigureCanvasTkAgg(self.figure, master=parent_widget)
+            self.canvas.draw()
 
-            file_data = files.get(series.file_id)
-            if not file_data:
-                logger.warning(f"File not found for series: {series.name}")
-                continue
+            # Create toolbar
+            self.toolbar = NavigationToolbar2Tk(self.canvas, parent_widget)
+            self.toolbar.update()
 
-            try:
-                self._plot_series(series, file_data, i)
-            except Exception as e:
-                logger.error(f"Failed to plot series {series.name}: {e}")
+        # Reset tracking
+        self.plotted_series.clear()
+        self.color_index = 0
 
-        # Configure axes
-        self._configure_axes(config)
+        return self.figure, self.canvas, self.toolbar
 
-        # Add grid
-        if config.get('show_grid', True):
-            self._add_grid(config)
+    def clear_plot(self):
+        """Clear the current plot"""
+        if self.axes:
+            self.axes.clear()
+        if self.axes2:
+            self.axes2.clear()
+            self.axes2 = None
 
-        # Add legend
-        if config.get('show_legend', True):
-            self._add_legend(config)
+        self.plotted_series.clear()
+        self.color_index = 0
 
-        # Apply layout
-        self.figure.tight_layout()
+        if self.canvas:
+            self.canvas.draw()
 
-        return self.figure
+    def plot_series(self, series_config: SeriesConfig, file_data: FileData,
+                    x_data: pd.Series = None, y_data: pd.Series = None) -> bool:
+        """
+        Plot a single data series
 
-    def _plot_series(self, series: SeriesConfig, file_data: FileData, index: int):
-        """Plot a single series"""
+        Args:
+            series_config: SeriesConfig object with display settings
+            file_data: FileData object containing the data
+            x_data: Optional pre-processed X data
+            y_data: Optional pre-processed Y data
 
-        # Get data
-        x_data, y_data = series.get_data(file_data)
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Ensure axes exists
+            if not self.axes:
+                logger.warning("No axes available for plotting")
+                return False
 
-        # Handle missing data
-        x_data, y_data = self._handle_missing_data(
-            x_data, y_data, series.missing_data_method
-        )
+            # Get data if not provided
+            if x_data is None or y_data is None:
+                x_data, y_data = self.prepare_series_data(series_config, file_data)
+                if x_data is None or y_data is None:
+                    return False
 
-        # Apply smoothing
-        if series.smoothing_enabled:
-            y_data = self._smooth_data(y_data, series.smoothing_window)
+            # Handle missing data
+            x_data, y_data = self.handle_missing_data(
+                x_data, y_data, series_config.missing_data_method
+            )
 
-        # Determine color
-        color = series.color or self.color_cycle[index % len(self.color_cycle)]
+            # Apply smoothing if requested
+            if series_config.smoothing and series_config.smooth_factor > 0:
+                y_data = self.apply_smoothing(y_data, series_config.smooth_factor)
 
-        # Plot based on type
-        plot_type = self.current_config.get('plot_type', PlotTypes.LINE.value)
+            # Determine which axis to use
+            ax = self.axes
+            if series_config.y_axis == "right":
+                if not self.axes2:
+                    self.axes2 = self.axes.twinx()
+                ax = self.axes2
 
-        if plot_type == PlotTypes.LINE.value:
-            self._plot_line(x_data, y_data, series, color)
-        elif plot_type == PlotTypes.SCATTER.value:
-            self._plot_scatter(x_data, y_data, series, color)
-        elif plot_type == PlotTypes.BAR.value:
-            self._plot_bar(x_data, y_data, series, color)
-        elif plot_type == PlotTypes.AREA.value:
-            self._plot_area(x_data, y_data, series, color)
-        else:
-            self._plot_line(x_data, y_data, series, color)
+            # Plot based on type
+            plot_obj = None
+            plot_type = series_config.plot_type.lower()
 
-        # Add trend line
-        if series.show_trendline:
-            self._add_trendline(x_data, y_data, series, color)
+            if plot_type == "line":
+                plot_obj = ax.plot(
+                    x_data, y_data,
+                    color=series_config.color,
+                    linestyle=series_config.line_style,
+                    linewidth=series_config.line_width,
+                    marker=series_config.marker_style if series_config.marker_style else None,
+                    markersize=series_config.marker_size,
+                    alpha=series_config.alpha,
+                    label=series_config.name,
+                    zorder=series_config.z_order,
+                    visible=series_config.visible
+                )[0]
 
-        # Add statistics box
-        if series.show_statistics:
-            self._add_statistics_box(y_data, series)
+            elif plot_type == "scatter":
+                plot_obj = ax.scatter(
+                    x_data, y_data,
+                    color=series_config.color,
+                    marker=series_config.marker_style if series_config.marker_style else 'o',
+                    s=series_config.marker_size ** 2,
+                    alpha=series_config.alpha,
+                    label=series_config.name,
+                    zorder=series_config.z_order,
+                    visible=series_config.visible
+                )
 
-        # Mark peaks
-        if series.show_peaks:
-            self._mark_peaks(x_data, y_data, series)
+            elif plot_type == "bar":
+                plot_obj = ax.bar(
+                    range(len(x_data)), y_data,
+                    color=series_config.color,
+                    alpha=series_config.alpha,
+                    label=series_config.name,
+                    zorder=series_config.z_order,
+                    visible=series_config.visible
+                )
+                # Set x-tick labels for bar chart
+                ax.set_xticks(range(len(x_data)))
+                ax.set_xticklabels(x_data, rotation=45, ha='right')
 
-    def _plot_line(self, x_data, y_data, series: SeriesConfig, color: str):
-        """Create line plot"""
-        self.axes.plot(
-            x_data, y_data,
-            label=series.legend_label,
-            color=color,
-            linestyle=series.line_style,
-            linewidth=series.line_width,
-            marker=series.marker,
-            markersize=series.marker_size,
-            alpha=series.alpha
-        )
+            elif plot_type == "area":
+                plot_obj = ax.fill_between(
+                    x_data, y_data, 0,
+                    color=series_config.color,
+                    alpha=series_config.alpha * 0.5,
+                    label=series_config.name,
+                    zorder=series_config.z_order,
+                    visible=series_config.visible
+                )
 
-    def _plot_scatter(self, x_data, y_data, series: SeriesConfig, color: str):
-        """Create scatter plot"""
-        self.axes.scatter(
-            x_data, y_data,
-            label=series.legend_label,
-            color=color,
-            s=series.marker_size ** 2,
-            marker=series.marker or 'o',
-            alpha=series.alpha
-        )
+            elif plot_type == "step":
+                plot_obj = ax.step(
+                    x_data, y_data,
+                    color=series_config.color,
+                    linewidth=series_config.line_width,
+                    alpha=series_config.alpha,
+                    label=series_config.name,
+                    where='mid',
+                    zorder=series_config.z_order,
+                    visible=series_config.visible
+                )[0]
 
-    def _plot_bar(self, x_data, y_data, series: SeriesConfig, color: str):
-        """Create bar plot"""
-        # For multiple series, offset bars
-        num_series = len([s for s in self.current_config.get('series', []) if s.visible])
-        if num_series > 1:
-            width = 0.8 / num_series
-            offset = width * self.current_config.get('series_index', 0)
-            x_positions = np.arange(len(x_data)) + offset
-        else:
-            x_positions = np.arange(len(x_data))
-            width = 0.8
+            elif plot_type == "both":
+                # Line with markers
+                plot_obj = ax.plot(
+                    x_data, y_data,
+                    color=series_config.color,
+                    linestyle=series_config.line_style,
+                    linewidth=series_config.line_width,
+                    marker=series_config.marker_style if series_config.marker_style else 'o',
+                    markersize=series_config.marker_size,
+                    alpha=series_config.alpha,
+                    label=series_config.name,
+                    zorder=series_config.z_order,
+                    visible=series_config.visible
+                )[0]
 
-        self.axes.bar(
-            x_positions, y_data,
-            width=width,
-            label=series.legend_label,
-            color=color,
-            alpha=series.alpha
-        )
+            # Add trend line if requested
+            if series_config.show_trend:
+                self.add_trend_line(ax, x_data, y_data, series_config)
 
-        # Set x-tick labels
-        self.axes.set_xticks(np.arange(len(x_data)))
-        self.axes.set_xticklabels(x_data, rotation=45, ha='right')
+            # Add statistics overlays if requested
+            if series_config.show_mean:
+                mean_val = np.nanmean(y_data)
+                ax.axhline(mean_val, color=series_config.color, linestyle='--',
+                           alpha=0.5, linewidth=1, label=f'{series_config.name} Mean')
 
-    def _plot_area(self, x_data, y_data, series: SeriesConfig, color: str):
-        """Create area plot"""
-        self.axes.fill_between(
-            x_data, y_data, 0,
-            label=series.legend_label,
-            color=color,
-            alpha=series.alpha * 0.5
-        )
-        self.axes.plot(
-            x_data, y_data,
-            color=color,
-            linewidth=series.line_width,
-            alpha=series.alpha
-        )
+            if series_config.show_std:
+                mean_val = np.nanmean(y_data)
+                std_val = np.nanstd(y_data)
+                ax.fill_between(ax.get_xlim(), mean_val - std_val, mean_val + std_val,
+                                color=series_config.color, alpha=0.1, label=f'{series_config.name} ±σ')
 
-    def _handle_missing_data(self, x_data, y_data, method: str):
-        """Handle missing data in series"""
+            # Store reference
+            self.plotted_series[series_config.series_id] = {
+                'plot_obj': plot_obj,
+                'series_config': series_config,
+                'axis': ax
+            }
 
-        # Create mask for valid data
-        mask = ~(pd.isna(x_data) | pd.isna(y_data))
+            # Format datetime axis if needed
+            if isinstance(x_data.iloc[0] if hasattr(x_data, 'iloc') else x_data[0],
+                          (pd.Timestamp, np.datetime64)):
+                self.format_datetime_axis(ax)
 
+            return True
+
+        except Exception as e:
+            logger.error(f"Error plotting series {series_config.name}: {e}")
+            return False
+
+    def prepare_series_data(self, series_config: SeriesConfig, file_data: FileData) -> Tuple[
+        Optional[pd.Series], Optional[pd.Series]]:
+        """
+        Prepare data for plotting from series configuration
+
+        Args:
+            series_config: Series configuration
+            file_data: File data containing the dataframe
+
+        Returns:
+            Tuple of (x_data, y_data) or (None, None) if error
+        """
+        try:
+            df = file_data.data
+
+            # Apply row range if specified
+            start_row = series_config.start_row if series_config.start_row is not None else 0
+            end_row = series_config.end_row if series_config.end_row is not None else len(df)
+
+            # Handle negative indices
+            if start_row < 0:
+                start_row = len(df) + start_row
+            if end_row < 0:
+                end_row = len(df) + end_row
+
+            # Slice dataframe
+            df_slice = df.iloc[start_row:end_row]
+
+            # Get x and y data
+            if series_config.x_column and series_config.x_column in df_slice.columns:
+                x_data = df_slice[series_config.x_column]
+            else:
+                # Use index if no x column specified
+                x_data = pd.Series(df_slice.index)
+
+            if series_config.y_column and series_config.y_column in df_slice.columns:
+                y_data = df_slice[series_config.y_column]
+            else:
+                logger.error(f"Y column '{series_config.y_column}' not found")
+                return None, None
+
+            # Convert to numeric if possible
+            if not pd.api.types.is_numeric_dtype(y_data):
+                y_data = pd.to_numeric(y_data, errors='coerce')
+
+            # Try to convert x to datetime if it looks like dates
+            if not pd.api.types.is_numeric_dtype(x_data) and not pd.api.types.is_datetime64_any_dtype(x_data):
+                try:
+                    x_data = pd.to_datetime(x_data, errors='coerce')
+                except:
+                    pass
+
+            return x_data, y_data
+
+        except Exception as e:
+            logger.error(f"Error preparing series data: {e}")
+            return None, None
+
+    def handle_missing_data(self, x_data: pd.Series, y_data: pd.Series,
+                            method: str) -> Tuple[pd.Series, pd.Series]:
+        """
+        Handle missing data according to specified method
+
+        Args:
+            x_data: X-axis data
+            y_data: Y-axis data
+            method: Method for handling missing data
+
+        Returns:
+            Tuple of cleaned (x_data, y_data)
+        """
         if method == MissingDataMethods.DROP.value:
+            # Drop rows with NaN values
+            mask = ~(x_data.isna() | y_data.isna())
             return x_data[mask], y_data[mask]
 
         elif method == MissingDataMethods.INTERPOLATE.value:
-            y_series = pd.Series(y_data)
-            y_series = y_series.interpolate(method='linear')
-            return x_data, y_series.values
+            # Linear interpolation
+            y_data = y_data.interpolate(method='linear')
 
         elif method == MissingDataMethods.FORWARD_FILL.value:
-            y_series = pd.Series(y_data)
-            y_series = y_series.fillna(method='ffill')
-            return x_data, y_series.values
+            # Forward fill
+            y_data = y_data.fillna(method='ffill')
 
         elif method == MissingDataMethods.BACKWARD_FILL.value:
-            y_series = pd.Series(y_data)
-            y_series = y_series.fillna(method='bfill')
-            return x_data, y_series.values
+            # Backward fill
+            y_data = y_data.fillna(method='bfill')
 
         elif method == MissingDataMethods.ZERO.value:
-            y_data = np.nan_to_num(y_data, 0)
-            return x_data, y_data
+            # Fill with zeros
+            y_data = y_data.fillna(0)
 
         elif method == MissingDataMethods.MEAN.value:
-            mean_val = np.nanmean(y_data)
-            y_data = np.nan_to_num(y_data, mean_val)
-            return x_data, y_data
+            # Fill with mean
+            y_data = y_data.fillna(y_data.mean())
 
-        return x_data[mask], y_data[mask]
+        elif method == MissingDataMethods.MEDIAN.value:
+            # Fill with median
+            y_data = y_data.fillna(y_data.median())
 
-    def _smooth_data(self, data, window: int):
-        """Apply smoothing to data"""
-        if len(data) < window:
+        return x_data, y_data
+
+    def apply_smoothing(self, data: pd.Series, smooth_factor: int) -> pd.Series:
+        """
+        Apply Savitzky-Golay smoothing to data
+
+        Args:
+            data: Data to smooth
+            smooth_factor: Smoothing window size (must be odd)
+
+        Returns:
+            Smoothed data
+        """
+        try:
+            # Ensure window size is odd and at least 3
+            window = max(3, smooth_factor)
+            if window % 2 == 0:
+                window += 1
+
+            # Don't smooth if not enough data points
+            if len(data) <= window:
+                return data
+
+            # Apply Savitzky-Golay filter
+            smoothed = savgol_filter(data.fillna(method='linear'),
+                                     window_length=window,
+                                     polyorder=min(3, window - 1))
+
+            return pd.Series(smoothed, index=data.index)
+
+        except Exception as e:
+            logger.warning(f"Smoothing failed: {e}, returning original data")
             return data
 
+    def add_trend_line(self, ax: plt.Axes, x_data: pd.Series, y_data: pd.Series,
+                       series_config: SeriesConfig):
+        """
+        Add trend line to plot
+
+        Args:
+            ax: Matplotlib axes
+            x_data: X-axis data
+            y_data: Y-axis data
+            series_config: Series configuration
+        """
         try:
-            # Use Savitzky-Golay filter
-            return savgol_filter(data, window, min(3, window - 1))
-        except:
-            # Fallback to moving average
-            return pd.Series(data).rolling(window, center=True).mean().fillna(data).values
+            # Convert to numeric values for fitting
+            if pd.api.types.is_datetime64_any_dtype(x_data):
+                x_numeric = np.arange(len(x_data))
+            else:
+                x_numeric = np.array(x_data)
 
-    def _add_trendline(self, x_data, y_data, series: SeriesConfig, color: str):
-        """Add trend line to plot"""
+            y_numeric = np.array(y_data)
 
-        # Prepare data
-        valid_mask = ~(np.isnan(x_data) | np.isnan(y_data))
-        x_clean = x_data[valid_mask]
-        y_clean = y_data[valid_mask]
+            # Remove NaN values
+            mask = ~(np.isnan(x_numeric) | np.isnan(y_numeric))
+            x_clean = x_numeric[mask]
+            y_clean = y_numeric[mask]
 
-        if len(x_clean) < 2:
+            if len(x_clean) < 2:
+                return
+
+            trend_type = series_config.trend_type
+            trend_color = series_config.trend_color or series_config.color
+            trend_style = series_config.trend_style or '--'
+            trend_width = series_config.trend_width or 1.0
+
+            if trend_type == TrendTypes.LINEAR.value:
+                # Linear regression
+                z = np.polyfit(x_clean, y_clean, 1)
+                p = np.poly1d(z)
+                trend_y = p(x_numeric)
+
+                ax.plot(x_data, trend_y, color=trend_color, linestyle=trend_style,
+                        linewidth=trend_width, alpha=0.7,
+                        label=f'{series_config.name} Linear Trend')
+
+            elif trend_type == TrendTypes.POLYNOMIAL.value:
+                # Polynomial fit (degree 2)
+                z = np.polyfit(x_clean, y_clean, 2)
+                p = np.poly1d(z)
+                trend_y = p(x_numeric)
+
+                ax.plot(x_data, trend_y, color=trend_color, linestyle=trend_style,
+                        linewidth=trend_width, alpha=0.7,
+                        label=f'{series_config.name} Polynomial Trend')
+
+            elif trend_type == TrendTypes.EXPONENTIAL.value:
+                # Exponential fit
+                # y = a * exp(b * x)
+                # log(y) = log(a) + b * x
+                y_positive = y_clean[y_clean > 0]
+                x_positive = x_clean[y_clean > 0]
+
+                if len(y_positive) > 1:
+                    z = np.polyfit(x_positive, np.log(y_positive), 1)
+                    trend_y = np.exp(z[1]) * np.exp(z[0] * x_numeric)
+
+                    ax.plot(x_data, trend_y, color=trend_color, linestyle=trend_style,
+                            linewidth=trend_width, alpha=0.7,
+                            label=f'{series_config.name} Exponential Trend')
+
+            elif trend_type == TrendTypes.LOGARITHMIC.value:
+                # Logarithmic fit
+                # y = a * log(x) + b
+                x_positive = x_clean[x_clean > 0]
+                y_positive = y_clean[x_clean > 0]
+
+                if len(x_positive) > 1:
+                    z = np.polyfit(np.log(x_positive), y_positive, 1)
+
+                    # Only plot for positive x values
+                    x_plot = x_numeric[x_numeric > 0]
+                    trend_y = z[0] * np.log(x_plot) + z[1]
+
+                    # Need to map back to original x_data indices
+                    ax.plot(x_data[x_numeric > 0], trend_y, color=trend_color,
+                            linestyle=trend_style, linewidth=trend_width, alpha=0.7,
+                            label=f'{series_config.name} Logarithmic Trend')
+
+            elif trend_type == TrendTypes.MOVING_AVERAGE.value:
+                # Moving average
+                window = min(20, len(y_clean) // 4)
+                if window > 1:
+                    ma = pd.Series(y_numeric).rolling(window=window, center=True).mean()
+                    ax.plot(x_data, ma, color=trend_color, linestyle=trend_style,
+                            linewidth=trend_width, alpha=0.7,
+                            label=f'{series_config.name} Moving Average')
+
+        except Exception as e:
+            logger.warning(f"Failed to add trend line: {e}")
+
+    def apply_plot_configuration(self, config: PlotConfiguration):
+        """
+        Apply plot configuration to current figure
+
+        Args:
+            config: PlotConfiguration object
+        """
+        if not self.axes:
             return
 
-        # Convert datetime to numeric if needed
-        if pd.api.types.is_datetime64_any_dtype(x_clean):
-            x_numeric = mdates.date2num(x_clean)
-        else:
-            x_numeric = x_clean
+        self.plot_config = config
 
-        trend_type = series.trend_type
-
-        if trend_type == TrendTypes.LINEAR.value:
-            # Linear regression
-            z = np.polyfit(x_numeric, y_clean, 1)
-            p = np.poly1d(z)
-            trend_y = p(x_numeric)
-
-        elif trend_type == TrendTypes.POLYNOMIAL.value:
-            # Polynomial regression
-            z = np.polyfit(x_numeric, y_clean, series.trend_order)
-            p = np.poly1d(z)
-            trend_y = p(x_numeric)
-
-        elif trend_type == TrendTypes.EXPONENTIAL.value:
-            # Exponential fit (log-linear)
-            y_log = np.log(np.abs(y_clean) + 1e-10)
-            z = np.polyfit(x_numeric, y_log, 1)
-            trend_y = np.exp(np.polyval(z, x_numeric))
-
-        elif trend_type == TrendTypes.MOVING_AVERAGE.value:
-            # Moving average
-            window = min(len(y_clean) // 4, 20)
-            trend_y = pd.Series(y_clean).rolling(window, center=True).mean().values
-
-        else:
-            return
-
-        # Plot trend line
-        self.axes.plot(
-            x_clean, trend_y,
-            '--',
-            color=color,
-            alpha=0.7,
-            linewidth=2,
-            label=f'{series.name} trend'
-        )
-
-    def _add_statistics_box(self, y_data, series: SeriesConfig):
-        """Add statistics text box"""
-
-        # Calculate statistics
-        stats = StatisticalAnalyzer.calculate_basic_stats(y_data)
-
-        # Create text
-        text = f"{series.name}\\n"
-        text += f"Mean: {stats['mean']:.3g}\\n"
-        text += f"Std: {stats['std']:.3g}\\n"
-        text += f"Min: {stats['min']:.3g}\\n"
-        text += f"Max: {stats['max']:.3g}"
-
-        # Add text box
-        props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
-        self.axes.text(
-            0.02, 0.98, text,
-            transform=self.axes.transAxes,
-            fontsize=9,
-            verticalalignment='top',
-            bbox=props
-        )
-
-    def _mark_peaks(self, x_data, y_data, series: SeriesConfig):
-        """Mark peaks and valleys"""
-        from scipy.signal import find_peaks
-
-        # Find peaks
-        prominence = series.peak_prominence * (np.max(y_data) - np.min(y_data))
-        peaks, _ = find_peaks(y_data, prominence=prominence)
-
-        if len(peaks) > 0:
-            self.axes.scatter(
-                x_data[peaks], y_data[peaks],
-                marker='^', s=100, color='red',
-                zorder=5, label=f'{series.name} peaks'
-            )
-
-        # Find valleys (invert and find peaks)
-        valleys, _ = find_peaks(-y_data, prominence=prominence)
-
-        if len(valleys) > 0:
-            self.axes.scatter(
-                x_data[valleys], y_data[valleys],
-                marker='v', s=100, color='blue',
-                zorder=5, label=f'{series.name} valleys'
-            )
-
-    def _configure_axes(self, config: Dict[str, Any]):
-        """Configure plot axes"""
+        # Set title
+        self.axes.set_title(config.title, fontsize=config.title_size,
+                            fontweight=config.title_weight)
 
         # Set labels
-        self.axes.set_title(
-            config.get('title', 'Data Analysis'),
-            fontsize=config.get('title_size', PlotConfig.TITLE_SIZE),
-            fontweight='bold',
-            pad=20
-        )
+        self.axes.set_xlabel(config.xlabel, fontsize=config.xlabel_size)
+        self.axes.set_ylabel(config.ylabel, fontsize=config.ylabel_size)
 
-        self.axes.set_xlabel(
-            config.get('xlabel', 'X Axis'),
-            fontsize=config.get('xlabel_size', PlotConfig.LABEL_SIZE)
-        )
-
-        self.axes.set_ylabel(
-            config.get('ylabel', 'Y Axis'),
-            fontsize=config.get('ylabel_size', PlotConfig.LABEL_SIZE)
-        )
-
-        # Set scales
-        if config.get('log_scale_x', False):
+        # Set scale
+        if config.log_scale_x:
             self.axes.set_xscale('log')
-
-        if config.get('log_scale_y', False):
-            self.axes.set_yscale('log')
-
-        # Set limits if specified
-        if 'x_min' in config and 'x_max' in config:
-            try:
-                self.axes.set_xlim(float(config['x_min']), float(config['x_max']))
-            except:
-                pass
-
-        if 'y_min' in config and 'y_max' in config:
-            try:
-                self.axes.set_ylim(float(config['y_min']), float(config['y_max']))
-            except:
-                pass
-
-        # Format datetime axis if needed
-        if detect_datetime_axis(self.axes.get_xlim()):
-            self.axes.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d %H:%M'))
-            self.axes.xaxis.set_major_locator(mdates.AutoDateLocator())
-            self.figure.autofmt_xdate()
-
-    def _add_grid(self, config: Dict[str, Any]):
-        """Add grid to plot"""
-        self.axes.grid(
-            True,
-            linestyle=config.get('grid_style', PlotConfig.GRID_STYLE),
-            alpha=config.get('grid_alpha', PlotConfig.GRID_ALPHA),
-            which='both'
-        )
-        self.axes.set_axisbelow(True)
-
-    def _add_legend(self, config: Dict[str, Any]):
-        """Add legend to plot"""
-        handles, labels = self.axes.get_legend_handles_labels()
-
-        if handles:
-            self.axes.legend(
-                handles, labels,
-                loc=config.get('legend_location', 'best'),
-                fontsize=config.get('legend_size', PlotConfig.LEGEND_SIZE),
-                frameon=True,
-                fancybox=True,
-                shadow=True
-            )
-
-    def _apply_theme(self, theme: str):
-        """Apply visual theme to plot"""
-        if theme == 'dark':
-            plt.style.use('dark_background')
-        elif theme == 'seaborn':
-            plt.style.use('seaborn-v0_8-whitegrid')
-        elif theme == 'ggplot':
-            plt.style.use('ggplot')
         else:
-            plt.style.use('default')
+            self.axes.set_xscale('linear')
 
-    def export_plot(self, filepath: str, dpi: Optional[int] = None):
-        """Export plot to file"""
-        if not self.figure:
-            raise ValueError("No plot to export")
+        if config.log_scale_y:
+            self.axes.set_yscale('log')
+        else:
+            self.axes.set_yscale('linear')
 
-        export_dpi = dpi or PlotConfig.EXPORT_DPI
-        self.figure.savefig(
-            filepath,
-            dpi=export_dpi,
-            bbox_inches='tight',
-            facecolor=self.figure.get_facecolor()
+        # Set limits if not auto
+        if not config.x_auto_scale and config.x_min is not None and config.x_max is not None:
+            self.axes.set_xlim(config.x_min, config.x_max)
+
+        if not config.y_auto_scale and config.y_min is not None and config.y_max is not None:
+            self.axes.set_ylim(config.y_min, config.y_max)
+
+        # Configure grid
+        self.axes.grid(config.show_grid, linestyle=config.grid_style,
+                       alpha=config.grid_alpha, color=config.grid_color)
+
+        # Configure legend
+        if config.show_legend and self.axes.get_legend_handles_labels()[0]:
+            self.axes.legend(loc=config.legend_location,
+                             frameon=config.legend_frameon,
+                             fancybox=config.legend_fancybox,
+                             shadow=config.legend_shadow,
+                             ncol=config.legend_ncol,
+                             fontsize=config.legend_fontsize)
+
+        # Apply to secondary axis if exists
+        if self.axes2:
+            self.axes2.grid(False)  # Don't double grid
+            if config.show_legend and self.axes2.get_legend_handles_labels()[0]:
+                self.axes2.legend(loc='upper right')
+
+        # Set margins
+        self.figure.subplots_adjust(
+            left=config.margin_left,
+            right=config.margin_right,
+            top=config.margin_top,
+            bottom=config.margin_bottom
         )
 
-        logger.info(f"Plot exported to: {filepath}")
+        # Redraw canvas
+        if self.canvas:
+            self.canvas.draw()
 
-    def clear(self):
-        """Clear current plot"""
-        if self.axes:
-            self.axes.clear()
+    def format_datetime_axis(self, ax: plt.Axes):
+        """
+        Format datetime axis with appropriate date formatter
+
+        Args:
+            ax: Matplotlib axes with datetime data
+        """
+        try:
+            # Get x-axis limits
+            xlim = ax.get_xlim()
+
+            # Calculate date range in days
+            if isinstance(xlim[0], (int, float)):
+                # Matplotlib date numbers
+                date_range = xlim[1] - xlim[0]
+            else:
+                date_range = (xlim[1] - xlim[0]).days if hasattr(xlim[1] - xlim[0], 'days') else 1
+
+            # Choose appropriate formatter based on range
+            if date_range < 1:
+                # Less than a day - show hours and minutes
+                formatter = mdates.DateFormatter('%H:%M')
+                locator = mdates.HourLocator(interval=1)
+            elif date_range < 7:
+                # Less than a week - show day and time
+                formatter = mdates.DateFormatter('%m/%d %H:%M')
+                locator = mdates.DayLocator()
+            elif date_range < 30:
+                # Less than a month - show day
+                formatter = mdates.DateFormatter('%m/%d')
+                locator = mdates.DayLocator(interval=2)
+            elif date_range < 365:
+                # Less than a year - show month/day
+                formatter = mdates.DateFormatter('%m/%d')
+                locator = mdates.MonthLocator()
+            else:
+                # More than a year - show year/month
+                formatter = mdates.DateFormatter('%Y-%m')
+                locator = mdates.YearLocator()
+
+            ax.xaxis.set_major_formatter(formatter)
+            ax.xaxis.set_major_locator(locator)
+
+            # Rotate labels for better readability
+            plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+        except Exception as e:
+            logger.warning(f"Failed to format datetime axis: {e}")
+
+    def update_series_visibility(self, series_id: str, visible: bool):
+        """
+        Update visibility of a plotted series
+
+        Args:
+            series_id: Series identifier
+            visible: Whether series should be visible
+        """
+        if series_id in self.plotted_series:
+            plot_obj = self.plotted_series[series_id]['plot_obj']
+            if hasattr(plot_obj, 'set_visible'):
+                plot_obj.set_visible(visible)
+            elif hasattr(plot_obj, '__iter__'):
+                # For bar plots and other collections
+                for item in plot_obj:
+                    if hasattr(item, 'set_visible'):
+                        item.set_visible(visible)
+
+            if self.canvas:
+                self.canvas.draw()
+
+    def highlight_data_point(self, series_id: str, point_index: int):
+        """
+        Highlight a specific data point
+
+        Args:
+            series_id: Series identifier
+            point_index: Index of point to highlight
+        """
+        if series_id in self.plotted_series:
+            series_info = self.plotted_series[series_id]
+            ax = series_info['axis']
+            config = series_info['series_config']
+
+            # Add a marker at the specified point
+            # Implementation depends on having access to the original data
+            # This is a placeholder for the highlighting logic
+
+            if self.canvas:
+                self.canvas.draw()
+
+    def export_figure(self, filepath: str, dpi: int = 300):
+        """
+        Export figure to file
+
+        Args:
+            filepath: Path to save file
+            dpi: Resolution for raster formats
+        """
         if self.figure:
-            self.figure.clear()
+            self.figure.savefig(filepath, dpi=dpi, bbox_inches='tight')
+            logger.info(f"Figure exported to {filepath}")
 
-        self.figure = None
-        self.axes = None
+    def get_figure_size(self) -> Tuple[float, float]:
+        """Get current figure size in inches"""
+        if self.figure:
+            return self.figure.get_size_inches()
+        return (14, 9)
+
+    def set_figure_size(self, width: float, height: float):
+        """Set figure size in inches"""
+        if self.figure:
+            self.figure.set_size_inches(width, height)
+            if self.canvas:
+                self.canvas.draw()

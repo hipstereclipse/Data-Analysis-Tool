@@ -1,16 +1,23 @@
-# !/usr/bin/env python3
+#!/usr/bin/env python3
 """
-Helper utility functions
+utils/helpers.py - Helper utility functions
+Complete implementation with all missing functions
 """
 
-import os
-import re
-import hashlib
-from pathlib import Path
-from typing import List, Optional, Any, Union
-import numpy as np
 import pandas as pd
+import numpy as np
+from pathlib import Path
+from typing import List, Optional, Tuple, Any, Union
+import colorsys
+import hashlib
+import json
 from datetime import datetime, timedelta
+import logging
+import re
+import shutil
+import uuid
+
+logger = logging.getLogger(__name__)
 
 
 def format_file_size(size_bytes: int) -> str:
@@ -21,7 +28,7 @@ def format_file_size(size_bytes: int) -> str:
         size_bytes: Size in bytes
 
     Returns:
-        Formatted size string
+        Formatted string (e.g., "1.5 MB")
     """
     for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
         if size_bytes < 1024.0:
@@ -38,48 +45,52 @@ def format_duration(seconds: float) -> str:
         seconds: Duration in seconds
 
     Returns:
-        Formatted duration string
+        Formatted string (e.g., "2h 30m 15s")
     """
-    if seconds < 60:
-        return f"{seconds:.1f}s"
-    elif seconds < 3600:
-        minutes = seconds / 60
-        return f"{minutes:.1f}m"
-    elif seconds < 86400:
-        hours = seconds / 3600
-        return f"{hours:.1f}h"
-    else:
-        days = seconds / 86400
-        return f"{days:.1f}d"
+    if seconds < 0:
+        return "0s"
+
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+
+    parts = []
+    if hours > 0:
+        parts.append(f"{hours}h")
+    if minutes > 0:
+        parts.append(f"{minutes}m")
+    if secs > 0 or not parts:
+        parts.append(f"{secs}s")
+
+    return " ".join(parts)
 
 
-def sanitize_filename(filename: str, max_length: int = 255) -> str:
+def sanitize_filename(filename: str) -> str:
     """
-    Sanitize filename for safe file system usage
+    Sanitize a filename by removing invalid characters
 
     Args:
-        filename: Original filename
-        max_length: Maximum allowed length
+        filename: Filename to sanitize
 
     Returns:
         Sanitized filename
     """
-    # Remove invalid characters
-    invalid_chars = '<>:"/\\|?*'
+    # Remove invalid characters for Windows/Unix
+    invalid_chars = r'<>:"/\|?*'
     for char in invalid_chars:
         filename = filename.replace(char, '_')
 
     # Remove control characters
-    filename = re.sub(r'[\x00-\x1f\x7f]', '', filename)
+    filename = ''.join(char for char in filename if ord(char) >= 32)
 
-    # Remove leading/trailing spaces and dots
+    # Remove leading/trailing dots and spaces
     filename = filename.strip('. ')
 
-    # Truncate if too long
+    # Limit length
+    max_length = 200
     if len(filename) > max_length:
-        name, ext = os.path.splitext(filename)
-        max_name_length = max_length - len(ext)
-        filename = name[:max_name_length] + ext
+        name, ext = Path(filename).stem, Path(filename).suffix
+        filename = name[:max_length - len(ext)] + ext
 
     # Ensure filename is not empty
     if not filename:
@@ -88,174 +99,164 @@ def sanitize_filename(filename: str, max_length: int = 255) -> str:
     return filename
 
 
-def generate_unique_id(prefix: str = "") -> str:
+def generate_unique_id() -> str:
     """
-    Generate unique identifier
-
-    Args:
-        prefix: Optional prefix for ID
+    Generate a unique identifier
 
     Returns:
         Unique ID string
     """
-    import uuid
-    unique_id = str(uuid.uuid4())[:8]
-
-    if prefix:
-        return f"{prefix}_{unique_id}"
-    return unique_id
+    return str(uuid.uuid4())
 
 
-def detect_datetime_column(data: Union[pd.Series, np.ndarray]) -> bool:
-    """
-    Check if data contains datetime values
-
-    Args:
-        data: Data to check
-
-    Returns:
-        True if datetime data detected
-    """
-    if isinstance(data, pd.Series):
-        if pd.api.types.is_datetime64_any_dtype(data):
-            return True
-
-        # Sample check for string dates
-        sample = data.dropna().head(20)
-        if len(sample) == 0:
-            return False
-
-        try:
-            pd.to_datetime(sample, errors='coerce')
-            success_rate = pd.to_datetime(sample, errors='coerce').notna().sum() / len(sample)
-            return success_rate > 0.8
-        except:
-            return False
-
-    return False
-
-
-def convert_to_datetime(data: Union[pd.Series, np.ndarray]) -> pd.Series:
-    """
-    Convert data to datetime if possible
-
-    Args:
-        data: Data to convert
-
-    Returns:
-        Converted datetime series or original
-    """
-    if isinstance(data, pd.Series):
-        if pd.api.types.is_datetime64_any_dtype(data):
-            return data
-
-        try:
-            converted = pd.to_datetime(data, errors='coerce')
-            if converted.notna().sum() / len(data.dropna()) > 0.8:
-                return converted
-        except:
-            pass
-
-    return pd.Series(data)
-
-
-def detect_datetime_axis(axis_data: Any) -> bool:
-    """
-    Check if axis contains datetime data
-
-    Args:
-        axis_data: Axis data to check
-
-    Returns:
-        True if datetime axis
-    """
-    try:
-        if hasattr(axis_data, '__iter__'):
-            sample = list(axis_data)[:10]
-            for item in sample:
-                if isinstance(item, (datetime, pd.Timestamp)):
-                    return True
-    except:
-        pass
-
-    return False
-
-
-def interpolate_missing_data(
-        x_data: np.ndarray,
-        y_data: np.ndarray,
-        method: str = 'linear'
-) -> tuple:
-    """
-    Interpolate missing data points
-
-    Args:
-        x_data: X-axis data
-        y_data: Y-axis data
-        method: Interpolation method
-
-    Returns:
-        Tuple of (x_data, y_data) with interpolated values
-    """
-    # Create mask for valid data
-    mask = ~(np.isnan(x_data) | np.isnan(y_data))
-
-    if np.sum(mask) < 2:
-        return x_data, y_data
-
-    # Interpolate
-    from scipy.interpolate import interp1d
-
-    try:
-        f = interp1d(x_data[mask], y_data[mask], kind=method, fill_value='extrapolate')
-        y_interpolated = f(x_data)
-        return x_data, y_interpolated
-    except:
-        return x_data, y_data
-
-
-def generate_color_sequence(n_colors: int) -> List[str]:
+def generate_color_sequence(n: int, start_hue: float = 0.0) -> List[str]:
     """
     Generate a sequence of distinct colors
 
     Args:
-        n_colors: Number of colors needed
+        n: Number of colors to generate
+        start_hue: Starting hue value (0-1)
 
     Returns:
-        List of hex color codes
+        List of hex color strings
     """
-    import matplotlib.cm as cm
-    import matplotlib.colors as mcolors
+    colors = []
+    golden_ratio = 0.618033988749895
 
-    if n_colors <= 12:
-        # Use predefined palette for small numbers
-        base_colors = [
-            '#3B82F6', '#10B981', '#F59E0B', '#EF4444',
-            '#8B5CF6', '#EC4899', '#14B8A6', '#F97316',
-            '#6366F1', '#84CC16', '#06B6D4', '#A855F7'
-        ]
-        return base_colors[:n_colors]
+    for i in range(n):
+        hue = (start_hue + i * golden_ratio) % 1.0
+        # Use high saturation and medium lightness for vibrant colors
+        rgb = colorsys.hsv_to_rgb(hue, 0.8, 0.85)
+        hex_color = '#{:02x}{:02x}{:02x}'.format(
+            int(rgb[0] * 255),
+            int(rgb[1] * 255),
+            int(rgb[2] * 255)
+        )
+        colors.append(hex_color)
+
+    return colors
+
+
+def detect_datetime_column(series: pd.Series, sample_size: int = 100) -> bool:
+    """
+    Detect if a column contains datetime data
+
+    Args:
+        series: Pandas series to check
+        sample_size: Number of rows to sample
+
+    Returns:
+        True if likely datetime column
+    """
+    # Already datetime
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return True
+
+    # Sample the data
+    sample = series.dropna().head(sample_size)
+
+    if len(sample) == 0:
+        return False
+
+    # Try to convert to datetime
+    try:
+        pd.to_datetime(sample)
+        return True
+    except:
+        pass
+
+    # Check for common datetime patterns
+    datetime_patterns = [
+        r'\d{4}-\d{2}-\d{2}',  # YYYY-MM-DD
+        r'\d{2}/\d{2}/\d{4}',  # MM/DD/YYYY
+        r'\d{2}\.\d{2}\.\d{4}',  # DD.MM.YYYY
+        r'\d{4}/\d{2}/\d{2}',  # YYYY/MM/DD
+    ]
+
+    sample_str = str(sample.iloc[0]) if len(sample) > 0 else ""
+    for pattern in datetime_patterns:
+        if re.match(pattern, sample_str):
+            return True
+
+    return False
+
+
+def convert_to_datetime(series: pd.Series, format: Optional[str] = None) -> pd.Series:
+    """
+    Convert a series to datetime
+
+    Args:
+        series: Series to convert
+        format: Optional datetime format string
+
+    Returns:
+        Converted datetime series
+    """
+    try:
+        if format:
+            return pd.to_datetime(series, format=format)
+        else:
+            return pd.to_datetime(series, infer_datetime_format=True)
+    except Exception as e:
+        logger.warning(f"Failed to convert to datetime: {e}")
+        return series
+
+
+def detect_datetime_axis(df: pd.DataFrame) -> Optional[str]:
+    """
+    Detect which column is likely a datetime axis
+
+    Args:
+        df: DataFrame to analyze
+
+    Returns:
+        Column name if found, None otherwise
+    """
+    for col in df.columns:
+        if detect_datetime_column(df[col]):
+            return col
+
+    # Check for common time column names
+    time_names = ['time', 'date', 'datetime', 'timestamp', 'ts', 't']
+    for col in df.columns:
+        if col.lower() in time_names:
+            if detect_datetime_column(df[col]):
+                return col
+
+    return None
+
+
+def interpolate_missing_data(data: Union[pd.Series, np.ndarray],
+                             method: str = 'linear') -> Union[pd.Series, np.ndarray]:
+    """
+    Interpolate missing data points
+
+    Args:
+        data: Data with missing values
+        method: Interpolation method ('linear', 'cubic', 'nearest', etc.)
+
+    Returns:
+        Data with interpolated values
+    """
+    if isinstance(data, np.ndarray):
+        # Convert to pandas for interpolation
+        series = pd.Series(data)
+        interpolated = series.interpolate(method=method)
+        return interpolated.values
     else:
-        # Generate colors from colormap
-        cmap = cm.get_cmap('tab20')
-        colors = []
-        for i in range(n_colors):
-            color = cmap(i / n_colors)
-            hex_color = mcolors.to_hex(color)
-            colors.append(hex_color)
-        return colors
+        return data.interpolate(method=method)
 
 
-def calculate_aspect_ratio(width: int, height: int) -> float:
+def calculate_aspect_ratio(width: float, height: float) -> float:
     """
     Calculate aspect ratio
 
     Args:
-        width: Width in pixels
-        height: Height in pixels
+        width: Width value
+        height: Height value
 
     Returns:
-        Aspect ratio
+        Aspect ratio (width/height)
     """
     if height == 0:
         return 1.0
@@ -264,7 +265,7 @@ def calculate_aspect_ratio(width: int, height: int) -> float:
 
 def estimate_sample_rate(time_data: Union[pd.Series, np.ndarray]) -> float:
     """
-    Estimate sampling rate from time data
+    Estimate the sample rate from time data
 
     Args:
         time_data: Time series data
@@ -275,73 +276,258 @@ def estimate_sample_rate(time_data: Union[pd.Series, np.ndarray]) -> float:
     if len(time_data) < 2:
         return 1.0
 
-    # Calculate time differences
+    # Convert to numpy array if needed
     if isinstance(time_data, pd.Series):
-        if pd.api.types.is_datetime64_any_dtype(time_data):
-            diffs = time_data.diff().dropna()
-            median_diff = diffs.median()
-            if hasattr(median_diff, 'total_seconds'):
-                seconds = median_diff.total_seconds()
-            else:
-                seconds = float(median_diff)
-        else:
-            diffs = np.diff(time_data)
-            seconds = np.median(diffs)
+        time_data = time_data.values
+
+    # Calculate differences
+    if np.issubdtype(time_data.dtype, np.datetime64):
+        # Convert datetime to seconds
+        time_data = pd.to_datetime(time_data)
+        diffs = np.diff(time_data) / pd.Timedelta(seconds=1)
     else:
         diffs = np.diff(time_data)
-        seconds = np.median(diffs)
 
-    if seconds > 0:
-        return 1.0 / seconds
-    return 1.0
+    # Get median difference (more robust than mean)
+    median_diff = np.median(diffs[diffs > 0]) if any(diffs > 0) else 1.0
+
+    # Calculate sample rate
+    sample_rate = 1.0 / median_diff if median_diff > 0 else 1.0
+
+    return sample_rate
 
 
-def create_backup(filepath: Path, max_backups: int = 3):
+def create_backup(filepath: str, backup_dir: Optional[str] = None) -> Optional[str]:
     """
-    Create backup of file
+    Create a backup of a file
 
     Args:
-        filepath: File to backup
-        max_backups: Maximum number of backups to keep
-    """
-    if not filepath.exists():
-        return
-
-    # Create backup directory
-    backup_dir = filepath.parent / "backups"
-    backup_dir.mkdir(exist_ok=True)
-
-    # Generate backup name with timestamp
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_name = f"{filepath.stem}_{timestamp}{filepath.suffix}"
-    backup_path = backup_dir / backup_name
-
-    # Copy file
-    import shutil
-    shutil.copy2(filepath, backup_path)
-
-    # Clean old backups
-    backups = sorted(backup_dir.glob(f"{filepath.stem}_*{filepath.suffix}"))
-    if len(backups) > max_backups:
-        for old_backup in backups[:-max_backups]:
-            old_backup.unlink()
-
-
-def calculate_hash(filepath: Path) -> str:
-    """
-    Calculate file hash for integrity checking
-
-    Args:
-        filepath: File to hash
+        filepath: Path to file to backup
+        backup_dir: Optional backup directory
 
     Returns:
-        SHA256 hash string
+        Path to backup file if successful, None otherwise
     """
-    sha256_hash = hashlib.sha256()
+    try:
+        source = Path(filepath)
+        if not source.exists():
+            return None
 
-    with open(filepath, "rb") as f:
-        for byte_block in iter(lambda: f.read(4096), b""):
-            sha256_hash.update(byte_block)
+        # Determine backup directory
+        if backup_dir:
+            backup_path = Path(backup_dir)
+        else:
+            backup_path = source.parent / "backups"
 
-    return sha256_hash.hexdigest()
+        # Create backup directory if needed
+        backup_path.mkdir(parents=True, exist_ok=True)
 
+        # Generate backup filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_file = backup_path / f"{source.stem}_{timestamp}{source.suffix}"
+
+        # Copy file
+        shutil.copy2(source, backup_file)
+
+        return str(backup_file)
+
+    except Exception as e:
+        logger.error(f"Failed to create backup: {e}")
+        return None
+
+
+def calculate_hash(data: Union[str, bytes, pd.DataFrame]) -> str:
+    """
+    Calculate SHA256 hash of data
+
+    Args:
+        data: Data to hash
+
+    Returns:
+        Hex string of hash
+    """
+    hasher = hashlib.sha256()
+
+    if isinstance(data, str):
+        hasher.update(data.encode('utf-8'))
+    elif isinstance(data, bytes):
+        hasher.update(data)
+    elif isinstance(data, pd.DataFrame):
+        hasher.update(data.to_json().encode('utf-8'))
+    else:
+        hasher.update(str(data).encode('utf-8'))
+
+    return hasher.hexdigest()
+
+
+def smooth_data(data: np.ndarray, window_size: int = 5,
+                method: str = 'mean') -> np.ndarray:
+    """
+    Smooth data using various methods
+
+    Args:
+        data: Data to smooth
+        window_size: Size of smoothing window
+        method: Smoothing method ('mean', 'median', 'gaussian')
+
+    Returns:
+        Smoothed data
+    """
+    if len(data) < window_size:
+        return data
+
+    if method == 'mean':
+        # Moving average
+        kernel = np.ones(window_size) / window_size
+        return np.convolve(data, kernel, mode='same')
+
+    elif method == 'median':
+        # Median filter
+        from scipy.signal import medfilt
+        return medfilt(data, kernel_size=window_size)
+
+    elif method == 'gaussian':
+        # Gaussian smoothing
+        from scipy.ndimage import gaussian_filter1d
+        sigma = window_size / 4
+        return gaussian_filter1d(data, sigma)
+
+    else:
+        return data
+
+
+def parse_range_string(range_str: str, max_value: int) -> Tuple[int, int]:
+    """
+    Parse a range string like "1:100" or "50:" into start and end indices
+
+    Args:
+        range_str: Range string
+        max_value: Maximum valid value
+
+    Returns:
+        Tuple of (start, end) indices
+    """
+    if not range_str or range_str.strip() == '':
+        return 0, max_value
+
+    parts = range_str.split(':')
+
+    if len(parts) == 1:
+        # Single value
+        try:
+            val = int(parts[0])
+            return val, val + 1
+        except:
+            return 0, max_value
+
+    elif len(parts) == 2:
+        # Range
+        try:
+            start = int(parts[0]) if parts[0] else 0
+            end = int(parts[1]) if parts[1] else max_value
+            return start, end
+        except:
+            return 0, max_value
+
+    else:
+        return 0, max_value
+
+
+def format_timedelta(td: pd.Timedelta) -> str:
+    """
+    Format a timedelta in human-readable format
+
+    Args:
+        td: Timedelta to format
+
+    Returns:
+        Formatted string
+    """
+    total_seconds = td.total_seconds()
+
+    if total_seconds < 60:
+        return f"{total_seconds:.1f} seconds"
+    elif total_seconds < 3600:
+        minutes = total_seconds / 60
+        return f"{minutes:.1f} minutes"
+    elif total_seconds < 86400:
+        hours = total_seconds / 3600
+        return f"{hours:.1f} hours"
+    else:
+        days = total_seconds / 86400
+        return f"{days:.1f} days"
+
+
+def safe_divide(numerator: float, denominator: float,
+                default: float = 0.0) -> float:
+    """
+    Safely divide two numbers
+
+    Args:
+        numerator: Numerator
+        denominator: Denominator
+        default: Default value if division fails
+
+    Returns:
+        Result of division or default
+    """
+    try:
+        if denominator == 0:
+            return default
+        return numerator / denominator
+    except:
+        return default
+
+
+def create_time_index(start: Union[str, datetime],
+                      periods: int,
+                      freq: str = 'h') -> pd.DatetimeIndex:
+    """
+    Create a time index for data
+
+    Args:
+        start: Start time
+        periods: Number of periods
+        freq: Frequency string
+
+    Returns:
+        DatetimeIndex
+    """
+    if isinstance(start, str):
+        start = pd.to_datetime(start)
+
+    return pd.date_range(start=start, periods=periods, freq=freq)
+
+
+def resample_data(df: pd.DataFrame, time_column: str,
+                  freq: str = '1H', method: str = 'mean') -> pd.DataFrame:
+    """
+    Resample time series data
+
+    Args:
+        df: DataFrame with time series
+        time_column: Name of time column
+        freq: Target frequency
+        method: Aggregation method
+
+    Returns:
+        Resampled DataFrame
+    """
+    # Set time column as index
+    df_resampled = df.set_index(time_column)
+
+    # Resample based on method
+    if method == 'mean':
+        return df_resampled.resample(freq).mean()
+    elif method == 'sum':
+        return df_resampled.resample(freq).sum()
+    elif method == 'max':
+        return df_resampled.resample(freq).max()
+    elif method == 'min':
+        return df_resampled.resample(freq).min()
+    elif method == 'first':
+        return df_resampled.resample(freq).first()
+    elif method == 'last':
+        return df_resampled.resample(freq).last()
+    else:
+        return df_resampled.resample(freq).mean()

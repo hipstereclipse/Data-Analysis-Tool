@@ -15,11 +15,11 @@ class AppConfig:
     VERSION = "5.0.0"
     AUTHOR = "Professional Edition"
 
-    # Window settings
-    DEFAULT_WIDTH = 1600
-    DEFAULT_HEIGHT = 900
-    MIN_WIDTH = 1200
-    MIN_HEIGHT = 700
+    # Window settings - responsive and DPI-aware defaults
+    DEFAULT_WIDTH = 1200  # Reduced for better compatibility
+    DEFAULT_HEIGHT = 750  # Reduced for better compatibility 
+    MIN_WIDTH = 900       # Lowered minimum for smaller screens
+    MIN_HEIGHT = 550      # Lowered minimum for smaller screens
 
     # File limits
     MAX_FILE_SIZE_MB = 500

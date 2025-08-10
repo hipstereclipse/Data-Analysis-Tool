@@ -712,40 +712,51 @@ class QuickActionBar(ctk.CTkFrame):
 
 
 class StatusBar(ctk.CTkFrame):
-    """Status bar with progress indicator support"""
+    """Enhanced status bar with centered progress and better visibility"""
 
     def __init__(self, parent, **kwargs):
-        super().__init__(parent, height=30, **kwargs)
+        super().__init__(parent, height=35, **kwargs)
+
+        # Configure grid for centering
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_columnconfigure(1, weight=1)  
+        self.grid_columnconfigure(2, weight=1)
 
         # Left side - status text
         self.status_label = ctk.CTkLabel(
             self,
             text="Ready",
-            anchor="w"
+            anchor="w",
+            font=("", 11)
         )
-        self.status_label.pack(side="left", padx=5)
+        self.status_label.grid(row=0, column=0, sticky="w", padx=5)
+
+        # Center - progress bar (initially hidden)
+        self.progress_frame = ctk.CTkFrame(self)
+        self.progress_frame.grid_columnconfigure(0, weight=1)  # Progress bar gets most space
+        self.progress_frame.grid_columnconfigure(1, weight=0)  # Label is fixed width
+        
+        self.progress_bar = ctk.CTkProgressBar(self.progress_frame, width=250)
+        self.progress_bar.grid(row=0, column=0, sticky="ew", padx=(10, 5), pady=5)
+        self.progress_bar.set(0)
+
+        # Progress label to the right of the bar
+        self.progress_label = ctk.CTkLabel(
+            self.progress_frame,
+            text="",
+            font=("", 10),
+            width=80  # Fixed width for consistent layout
+        )
+        self.progress_label.grid(row=0, column=1, sticky="w", padx=(5, 10), pady=5)
 
         # Right side - counts
         self.counts_label = ctk.CTkLabel(
             self,
             text="",
-            anchor="e"
+            anchor="e",
+            font=("", 11)
         )
-        self.counts_label.pack(side="right", padx=5)
-
-        # Progress bar (initially hidden)
-        self.progress_frame = ctk.CTkFrame(self)
-        self.progress_bar = ctk.CTkProgressBar(self.progress_frame)
-        self.progress_bar.pack(fill="x", padx=5, pady=2)
-        self.progress_bar.set(0)
-
-        # Progress label
-        self.progress_label = ctk.CTkLabel(
-            self.progress_frame,
-            text="",
-            font=("", 10)
-        )
-        self.progress_label.pack()
+        self.counts_label.grid(row=0, column=2, sticky="e", padx=5)
 
         self.is_progress_visible = False
 
@@ -770,14 +781,10 @@ class StatusBar(ctk.CTkFrame):
         )
 
     def show_progress(self, value: float = 0):
-        """Show progress bar with optional value (0-1)"""
+        """Show progress bar centered at bottom with optional value (0-1)"""
         if not self.is_progress_visible:
-            # Hide status and counts temporarily
-            self.status_label.pack_forget()
-            self.counts_label.pack_forget()
-
-            # Show progress
-            self.progress_frame.pack(fill="x", expand=True, padx=5, pady=2)
+            # Show progress frame in center column
+            self.progress_frame.grid(row=0, column=1, sticky="ew", padx=20, pady=2)
             self.is_progress_visible = True
 
         # Update progress value
@@ -785,19 +792,19 @@ class StatusBar(ctk.CTkFrame):
             self.progress_bar.set(value)
             percentage = int(value * 100)
             self.progress_label.configure(text=f"{percentage}%")
+        else:
+            self.progress_bar.set(0)
+            self.progress_label.configure(text="Loading...")
 
     def hide_progress(self):
-        """Hide progress bar and restore status"""
+        """Hide progress bar and restore normal status layout"""
         if self.is_progress_visible:
-            self.progress_frame.pack_forget()
+            self.progress_frame.grid_forget()
             self.is_progress_visible = False
-
-            # Restore status and counts
-            self.status_label.pack(side="left", padx=5)
-            self.counts_label.pack(side="right", padx=5)
 
             # Reset progress
             self.progress_bar.set(0)
+            self.progress_label.configure(text="")
             self.progress_label.configure(text="")
 
 class CollapsibleFrame(ctk.CTkFrame):

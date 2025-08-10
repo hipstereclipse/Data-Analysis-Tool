@@ -45,6 +45,9 @@ class FileData:
     # User metadata
     notes: str = ""
     tags: List[str] = field(default_factory=list)
+    
+    # Series tracking
+    series_list: List[str] = field(default_factory=list)  # Track associated series IDs
 
     def __post_init__(self):
         """Initialize computed properties"""
@@ -102,8 +105,9 @@ class FileData:
 
         # Basic properties
         self.shape = self.data.shape
-        self.columns = self.data.columns.tolist()
-        self.dtypes = {col: str(dtype) for col, dtype in self.data.dtypes.items()}
+        # Ensure all column names are strings
+        self.columns = [str(col) for col in self.data.columns.tolist()]
+        self.dtypes = {str(col): str(dtype) for col, dtype in self.data.dtypes.items()}
 
         # Clear existing categorizations
         self.numeric_columns = []
@@ -245,18 +249,38 @@ class SeriesConfig:
     start_index: Optional[int] = 0
     end_index: Optional[int] = None
 
-    # Display settings
+    # Display settings - Enhanced
     color: str = "#3B82F6"
-    line_style: str = "-"
+    line_style: str = "-"  # '-', '--', '-.', ':', 'none'
     line_width: float = 1.5
-    marker: Optional[str] = None
+    marker: Optional[str] = None  # 'o', 's', '^', 'v', '<', '>', 'D', 'none'
     marker_size: float = 6.0
+    marker_edge_color: str = "auto"  # "auto" uses line color
+    marker_edge_width: float = 0.8
     alpha: float = 1.0
     visible: bool = True
     show_in_legend: bool = True
     legend_label: str = ""
-    plot_type: str = "line"
-    missing_data_method: str = "skip"  # Options: "skip", "interpolate", "zero"
+    plot_type: str = "line"  # "line", "scatter", "bar", "step"
+    missing_data_method: str = "skip"  # Options: "skip", "interpolate", "zero", "highlight"
+    
+    # Advanced styling options
+    fill_between: bool = False
+    fill_color: str = "auto"  # "auto" uses line color with reduced alpha
+    fill_alpha: float = 0.2
+    error_bars: bool = False
+    error_color: str = "auto"
+    error_alpha: float = 0.6
+    smooth_line: bool = False  # Apply smoothing filter
+    smooth_window: int = 5
+    z_order: int = 1  # Drawing order (higher = on top)
+    
+    # Data handling options
+    outlier_handling: str = "keep"  # "keep", "remove", "highlight", "clamp"
+    outlier_threshold: float = 3.0  # Standard deviations for outlier detection
+    outlier_color: str = "red"
+    data_decimation: bool = False  # Reduce data points for performance
+    decimation_factor: int = 1
     
     # Additional display settings
     show_trendline: bool = False
@@ -303,6 +327,10 @@ class SeriesConfig:
     
     def __post_init__(self):
         """Initialize computed properties for backward compatibility"""
+        # Set default legend label if not provided
+        if not self.legend_label:
+            self.legend_label = self.name
+            
         # Map start_index/end_index to start_row/end_row for compatibility
         if self.start_row is None and self.start_index is not None:
             self.start_row = self.start_index
@@ -353,6 +381,10 @@ class SeriesConfig:
             return x_values[mask], y_values[mask]
 
         return np.array([]), np.array([])
+
+    def copy(self) -> 'SeriesConfig':
+        """Create a copy of this SeriesConfig"""
+        return SeriesConfig.from_dict(self.to_dict())
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary"""

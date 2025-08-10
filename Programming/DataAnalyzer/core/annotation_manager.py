@@ -273,27 +273,34 @@ class AnnotationManager:
                     return annotation
         return None
 
-    def add_pumpdown_annotation(self, x_start: float, x_end: float, y_value: float, 
-                               series_name: str = "") -> AnnotationConfig:
+    def add_pumpdown_annotation(self, x_start: float, x_end: float, p_initial: float, 
+                               p_final: float = None, time_to_base: float = None, 
+                               label: str = "", series_name: str = "") -> AnnotationConfig:
         """
         Add pumpdown annotation for vacuum analysis
         
         Args:
             x_start: Start X coordinate
             x_end: End X coordinate  
-            y_value: Y coordinate for annotation
+            p_initial: Initial pressure
+            p_final: Final pressure (optional)
+            time_to_base: Time to base pressure (optional)
+            label: Annotation label
             series_name: Name of the series
             
         Returns:
             Created AnnotationConfig
         """
+        # Use label if provided, otherwise create default
+        text = label if label else f"Pumpdown: {series_name}"
+        
         annotation = AnnotationConfig(
             annotation_type="line",
-            text=f"Pumpdown: {series_name}",
+            text=text,
             x=x_start,
-            y=y_value,
+            y=p_initial,
             x2=x_end,
-            y2=y_value,
+            y2=p_final if p_final is not None else p_initial,
             color="#FF6B35",
             line_style="--",
             alpha=0.8

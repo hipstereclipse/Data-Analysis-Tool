@@ -1883,7 +1883,15 @@ class AnalysisDialog:
         window_size = self.window_size_var.get()
 
         # Run analysis
-        result = self.vacuum_analyzer.calculate_base_pressure(y_data, window_size)
+        result = self.vacuum_analyzer.calculate_base_pressure(
+        y_data, window_size)
+        
+        # Handle different return types
+        if isinstance(result, tuple):
+            base_pressure, rolling_min, rolling_std = result
+        else:
+            base_pressure = result
+            rolling_min = rolling_std = None
 
         # Store result
         self.vacuum_results['base_pressure'] = result
@@ -2314,11 +2322,11 @@ class AnnotationDialog:
         frame = ttk.Frame(self.properties_frame)
         frame.pack(fill="x", pady=5)
         ttk.Label(frame, text="Color:").pack(side="left", padx=5)
-        color_button = ttk.Button(
+        color_button = ctk.CTkButton(
             frame,
             text="",
             width=3,
-            background=annotation.color
+            fg_color=annotation.color
         )
         color_button.pack(side="left", padx=5)
 
@@ -3510,6 +3518,18 @@ class ExportDialog:
 class VacuumAnalysisDialog:
     """Dialog for vacuum-specific data analysis tools"""
 
+
+    def _safe_format_float(self, value):
+        """Safely format a value as float"""
+        try:
+            if pd.api.types.is_numeric_dtype(type(value)):
+                return f"{float(value):.2f}"
+            else:
+                # Try to convert string to float
+                return f"{float(value):.2f}"
+        except (ValueError, TypeError):
+            return str(value)
+
     def __init__(
             self,
             parent,
@@ -4224,16 +4244,41 @@ class VacuumAnalysisDialog:
             elif not pump_mask[i] and pump_start is not None:
                 duration = i - pump_start
                 if duration >= min_duration:
-                    # Check pressure drop
-                    p_initial = y_data[pump_start]
-                    p_final = y_data[i - 1]
+                    # Check pressure drop - ensure numeric values
+                    try:
+                        p_initial = float(y_data[pump_start])
+                        p_final = float(y_data[i - 1])
+                    except (ValueError, TypeError):
+                        continue  # Skip this iteration if values can't be converted
 
                     if p_initial > 0 and p_final > 0:
                         pressure_drop = np.log10(p_initial / p_final)
 
                         if pressure_drop >= min_drop:
-                            # Calculate time to base
-                            time_to_base = x_data[i - 1] - x_data[pump_start]
+                            # Calculate time to base (ensure numeric values)
+                            try:
+                                # Handle datetime objects
+                                x_start_raw = x_data[pump_start]
+                                x_end_raw = x_data[i - 1]
+                                
+                                # Try to convert to numeric
+                                if hasattr(x_start_raw, 'timestamp'):  # datetime object
+                                    x_start_val = x_start_raw.timestamp()
+                                    x_end_val = x_end_raw.timestamp()
+                                elif isinstance(x_start_raw, str):
+                                    # Try parsing datetime string
+                                    import pandas as pd
+                                    x_start_dt = pd.to_datetime(x_start_raw)
+                                    x_end_dt = pd.to_datetime(x_end_raw)
+                                    x_start_val = x_start_dt.timestamp()
+                                    x_end_val = x_end_dt.timestamp()
+                                else:
+                                    x_start_val = float(x_start_raw)
+                                    x_end_val = float(x_end_raw)
+                                
+                                time_to_base = x_end_val - x_start_val
+                            except (ValueError, TypeError, AttributeError):
+                                time_to_base = 0.0
 
                             pumpdown_info = {
                                 "start": pump_start,
@@ -4261,8 +4306,29 @@ class VacuumAnalysisDialog:
                             result_text += f"  Initial Pressure: {p_initial:.2e} mbar\n"
                             result_text += f"  Final Pressure: {p_final:.2e} mbar\n"
                             result_text += f"  Pressure Drop: {pressure_drop:.1f} orders\n"
-                            result_text += f"  Time to Base: {time_to_base:.1f} units\n"
-                            result_text += f"  Pumping Speed: {pressure_drop / time_to_base:.2f} orders/unit\n\n"
+                            # Safely format time_to_base regardless of input type
+                            if isinstance(time_to_base, (int, float)):
+                                if time_to_base > 0:
+                                    result_text += f"  Time to Base: {time_to_base:.1f} units\n"
+                                    pumping_speed = pressure_drop / time_to_base
+                                    result_text += f"  Pumping Speed: {pumping_speed:.2f} orders/unit\n\n"
+                                else:
+                                    result_text += f"  Time to Base: {time_to_base:.1f} units\n"
+                                    result_text += f"  Pumping Speed: N/A (instantaneous)\n\n"
+                            else:
+                                # Handle string or other types
+                                try:
+                                    time_val = float(str(time_to_base))
+                                    if time_val > 0:
+                                        result_text += f"  Time to Base: {time_val:.1f} units\n"
+                                        pumping_speed = pressure_drop / time_val
+                                        result_text += f"  Pumping Speed: {pumping_speed:.2f} orders/unit\n\n"
+                                    else:
+                                        result_text += f"  Time to Base: {time_val:.1f} units\n"
+                                        result_text += f"  Pumping Speed: N/A (instantaneous)\n\n"
+                                except (ValueError, TypeError):
+                                    result_text += f"  Time to Base: {str(time_to_base)} units\n"
+                                    result_text += f"  Pumping Speed: N/A (invalid time data)\n\n"
 
                 pump_start = None
 

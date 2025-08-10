@@ -70,7 +70,7 @@ class FileManager:
 
     def load_excel_file(self, filepath: str, sheet_name: Optional[str] = None) -> Optional[FileData]:
         """
-        Load an Excel file
+        Load an Excel file with comprehensive column name handling
 
         Args:
             filepath: Path to Excel file
@@ -81,6 +81,7 @@ class FileManager:
         """
         try:
             path = Path(filepath)
+            logger.info(f"Loading Excel file: {path}")
 
             # Read Excel file
             excel_file = pd.ExcelFile(filepath)
@@ -91,15 +92,36 @@ class FileManager:
             if sheet_name:
                 # Load specific sheet
                 df = pd.read_excel(excel_file, sheet_name=sheet_name)
+                # Immediately ensure column names are strings to prevent integer column issues
+                df.columns = [str(col) if col is not None else f"Unnamed_{i}" for i, col in enumerate(df.columns)]
                 sheets[sheet_name] = df
                 main_df = df
+                logger.debug(f"Loaded specific sheet '{sheet_name}' with columns: {list(df.columns)}")
             else:
-                # Load all sheets
+                # Load all sheets with improved error handling
                 for name in excel_file.sheet_names:
-                    sheets[name] = pd.read_excel(excel_file, sheet_name=name)
+                    try:
+                        sheet_df = pd.read_excel(excel_file, sheet_name=name)
+                        # Ensure column names are strings and handle None/NaN columns
+                        sheet_df.columns = [str(col) if col is not None else f"Unnamed_{i}" for i, col in enumerate(sheet_df.columns)]
+                        sheets[name] = sheet_df
+                        logger.debug(f"Successfully loaded sheet '{name}' with columns: {list(sheet_df.columns)}")
+                    except Exception as sheet_error:
+                        logger.warning(f"Failed to load sheet '{name}': {sheet_error}")
+                        continue
 
-                # Use first sheet as main dataframe
-                main_df = sheets[excel_file.sheet_names[0]]
+                # Use first successfully loaded sheet as main dataframe
+                if sheets:
+                    main_df = list(sheets.values())[0]
+                    logger.info(f"Using sheet '{list(sheets.keys())[0]}' as main dataframe")
+                else:
+                    logger.error("No sheets could be loaded from Excel file")
+                    return None
+
+            # Double-check main dataframe column names are strings
+            if main_df is not None:
+                main_df.columns = [str(col) if col is not None else f"Unnamed_{i}" for i, col in enumerate(main_df.columns)]
+                logger.debug(f"Final main dataframe columns: {list(main_df.columns)}")
 
             # Create FileData object
             file_data = FileData(
@@ -114,6 +136,13 @@ class FileManager:
             
             # Store sheets info (if needed for future use)
             file_data.sheets = sheets
+
+            logger.info(f"Successfully loaded Excel file: {path.name} with {len(sheets)} sheet(s)")
+            return file_data
+
+        except Exception as e:
+            logger.error(f"Failed to load Excel file: {e}")
+            return None
 
             logger.info(f"Loaded Excel file: {path.name} with {len(sheets)} sheet(s)")
             return file_data

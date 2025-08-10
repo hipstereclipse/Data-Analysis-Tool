@@ -29,6 +29,13 @@ from config.constants import (
     KeyBindings, DefaultSettings
 )
 
+# Import enhanced components
+from ui.theme_manager import theme_manager
+from ui.enhanced_series_dialog import show_enhanced_series_dialog, EnhancedSeriesDialog, DualHandleRangeSlider
+from ui.enhanced_multi_series_analysis import show_enhanced_multi_series_analysis
+from core.enhanced_plot_manager import EnhancedPlotManager
+from ui.theme_manager import EnhancedThemeManager
+
 # Import models
 from models.data_models import FileData, SeriesConfig, PlotConfiguration, AnnotationConfig
 from models.project_models import Project
@@ -36,10 +43,13 @@ from models.project_models import Project
 # Import UI components
 from ui.components import StatusBar, QuickActionBar
 from ui.panels import FilePanel, SeriesPanel, PlotPanel, ConfigPanel
+# Import UI dialogs and components directly from dialogs module
 from ui.dialogs import (
     SeriesConfigDialog, VacuumAnalysisDialog, AnnotationDialog,
     DataSelectorDialog, PlotConfigDialog, ExportDialog
 )
+from ui.smart_series_dialog import show_smart_series_dialog
+from ui.modern_annotation_dialog import show_modern_annotation_dialog
 
 # Import core managers
 from core.file_manager import FileManager
@@ -77,10 +87,26 @@ class ExcelDataPlotter(ctk.CTk):
         """Initialize the main application window"""
         super().__init__()
 
-        # Configure window
+        # Configure window - make it resolution-independent
         self.title(f"{AppConfig.APP_NAME} - {AppConfig.APP_SUBTITLE}")
-        self.geometry(f"{AppConfig.DEFAULT_WIDTH}x{AppConfig.DEFAULT_HEIGHT}")
+        
+        # Get screen dimensions for better initial sizing
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        
+        # Use 80% of screen size but respect minimums and maximums
+        target_width = max(AppConfig.MIN_WIDTH, min(int(screen_width * 0.8), AppConfig.DEFAULT_WIDTH))
+        target_height = max(AppConfig.MIN_HEIGHT, min(int(screen_height * 0.8), AppConfig.DEFAULT_HEIGHT))
+        
+        # Center window on screen
+        x = (screen_width - target_width) // 2
+        y = (screen_height - target_height) // 2
+        
+        self.geometry(f"{target_width}x{target_height}+{x}+{y}")
         self.minsize(AppConfig.MIN_WIDTH, AppConfig.MIN_HEIGHT)
+        
+        # Allow window to be maximized and handle scaling properly
+        self.state('normal')  # Ensure normal state for sizing
 
         # Configure grid layout for main window
         self.grid_rowconfigure(0, weight=1)
@@ -91,10 +117,13 @@ class ExcelDataPlotter(ctk.CTk):
         self.all_series: Dict[str, SeriesConfig] = {}  # Dictionary of SeriesConfig objects
         self.color_index = 0  # For auto-assigning colors
         self.auto_colors = ColorPalette.CHART_COLORS
+        self.file_id_mapping = {}  # Mapping from display text to file ID
 
         # Initialize managers
         self.file_manager = FileManager()
         self.plot_manager = PlotManager()
+        self.theme_manager = EnhancedThemeManager()
+        self.enhanced_plot_manager = None  # Will be initialized when figure is created
         self.annotation_manager = AnnotationManager()
         self.project_manager = ProjectManager()
         self.export_manager = ExportManager()
@@ -110,7 +139,9 @@ class ExcelDataPlotter(ctk.CTk):
         self.figure = None  # Matplotlib figure
         self.canvas = None  # Matplotlib canvas
         self.toolbar = None  # Matplotlib toolbar
+        self.plot_axes = None  # Current plot axes for annotations
         self.plot_config = PlotConfiguration()  # Current plot configuration
+        self._creating_plot = False  # Mutex flag to prevent multiple simultaneous plot creation
 
         # Initialize UI variables
         self.init_variables()
@@ -145,6 +176,11 @@ class ExcelDataPlotter(ctk.CTk):
         self.fig_height_var = tk.DoubleVar(value=9.0)
         self.dpi_var = tk.IntVar(value=100)
 
+        # Advanced plot configuration variables
+        self.plot_type_var = tk.StringVar(value="line")
+        self.title_color_var = tk.StringVar(value="auto")
+        self.axis_text_color_var = tk.StringVar(value="auto")
+
         # Series configuration variables
         self.series_name_var = tk.StringVar()
         self.series_file_var = tk.StringVar()
@@ -157,6 +193,15 @@ class ExcelDataPlotter(ctk.CTk):
 
         # Export variables
         self.export_format = tk.StringVar(value="PNG (High Quality)")
+        
+        # Ensure FileData compatibility
+        self.migrate_file_data()
+    
+    def migrate_file_data(self):
+        """Ensure all FileData objects have required attributes for backward compatibility"""
+        for file_id, file_data in self.loaded_files.items():
+            if not hasattr(file_data, 'series_list'):
+                file_data.series_list = []
 
     def create_ui(self):
         """Create the main UI layout"""
@@ -233,6 +278,8 @@ class ExcelDataPlotter(ctk.CTk):
         # Analysis menu
         analysis_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Analysis", menu=analysis_menu)
+        analysis_menu.add_command(label="Enhanced Multi-Series Analysis...", command=self.show_enhanced_multi_analysis)
+        analysis_menu.add_separator()
         analysis_menu.add_command(label="Statistical Analysis...", command=self.show_statistical_analysis)
         analysis_menu.add_command(label="Vacuum Analysis...", command=self.show_vacuum_analysis)
         analysis_menu.add_separator()
@@ -274,7 +321,7 @@ class ExcelDataPlotter(ctk.CTk):
         self.top_bar.add_separator(side="left")
 
         # Plot actions (right side)
-        self.top_bar.add_action("Generate Plot", "📊", self.create_plot, "Create plot from series", side="right")
+        self.plot_button = self.top_bar.add_action("Generate Plot", "📊", self.create_plot, "Create plot from visible series", side="right")
         self.top_bar.add_action("Export", "�", self.show_export_dialog, "Export plot or data", side="right")
         self.top_bar.add_separator(side="right")
 
@@ -286,42 +333,40 @@ class ExcelDataPlotter(ctk.CTk):
 
         # View actions (center)
         self.top_bar.add_action("Theme", "🎨", self.toggle_theme, "Toggle dark/light theme", side="center")
-        self.top_bar.add_action("Configure", "�", self.show_plot_config, "Configure plot settings", side="center")
+        self.top_bar.add_action("Plot Config", "⚙️", self.show_advanced_plot_config, "Advanced plot configuration", side="center")
 
     def create_main_content(self):
-        """Create the main content area - matching legacy create_main_content"""
-        # Content frame (matching legacy)
+        """Create the main content area with responsive layout"""
+        # Content frame with improved layout
         self.content_frame = ctk.CTkFrame(self.main_container)
         self.content_frame.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
         self.content_frame.grid_rowconfigure(0, weight=1)
-        self.content_frame.grid_columnconfigure(1, weight=1)
+        self.content_frame.grid_columnconfigure(1, weight=3)  # Give more weight to plot area
 
-        # Collapsible sidebar (matching legacy)
-        self.sidebar = ctk.CTkFrame(self.content_frame, width=400)
+        # Responsive sidebar with better sizing
+        sidebar_width = max(320, int(self.winfo_screenwidth() * 0.22))  # 22% of screen width, min 320px
+        self.sidebar = ctk.CTkFrame(self.content_frame, width=sidebar_width)
         self.sidebar.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
         self.sidebar.grid_propagate(False)
 
-        # Sidebar content with tabs (matching legacy)
-        self.sidebar_tabs = ctk.CTkTabview(self.sidebar, width=390, height=800)
-        self.sidebar_tabs.pack(fill="both", expand=True)
+        # Sidebar content with simplified tabs
+        tab_width = sidebar_width - 20
+        self.sidebar_tabs = ctk.CTkTabview(self.sidebar, width=tab_width)
+        self.sidebar_tabs.pack(fill="both", expand=True, padx=5, pady=5)
 
-        # Create tabs (matching legacy names)
-        self.files_tab = self.sidebar_tabs.add("Files")
-        self.series_tab = self.sidebar_tabs.add("Series")  
-        self.config_tab = self.sidebar_tabs.add("Configuration")
-        self.export_tab = self.sidebar_tabs.add("Export")
+        # Create only essential tabs
+        self.files_tab = self.sidebar_tabs.add("📁 Files")
+        self.series_tab = self.sidebar_tabs.add("📊 Series")
 
         # Create tab content
         self.create_files_panel(self.files_tab)
-        self.create_series_panel(self.series_tab)
-        self.create_config_panel(self.config_tab)
-        self.create_export_panel(self.export_tab)
+        self.create_integrated_series_panel(self.series_tab)
 
-        # Main plot area (right side)
+        # Main plot area with improved responsive design
         self.plot_area_frame = ctk.CTkFrame(self.content_frame)
         self.plot_area_frame.grid(row=0, column=1, sticky="nsew", padx=5)
         
-        # Configure plot area grid
+        # Configure plot area grid for responsive content
         self.plot_area_frame.grid_rowconfigure(0, weight=1)
         self.plot_area_frame.grid_columnconfigure(0, weight=1)
 
@@ -348,181 +393,222 @@ class ExcelDataPlotter(ctk.CTk):
         # Store file cards
         self.file_cards = {}
 
-    def create_series_panel(self, parent):
-        """Create the series configuration panel"""
-        # Header
-        header_frame = ctk.CTkFrame(parent)
-        header_frame.pack(fill="x", padx=5, pady=5)
+    def create_integrated_series_panel(self, parent):
+        """Create an integrated series panel with creation, management, preview, and configuration"""
+        # Main container with vertical layout
+        main_container = ctk.CTkFrame(parent)
+        main_container.pack(fill="both", expand=True, padx=5, pady=5)
 
-        ctk.CTkLabel(header_frame, text="Data Series", font=("", 14, "bold")).pack(side="left")
-        ctk.CTkButton(header_frame, text="Add", command=self.add_series, width=60).pack(side="right", padx=2)
+        # === SERIES CREATION SECTION (COLLAPSIBLE) ===
+        creation_container = ctk.CTkFrame(main_container)
+        creation_container.pack(fill="x", pady=(0, 10))
+        
+        # Header with toggle button
+        creation_header = ctk.CTkFrame(creation_container)
+        creation_header.pack(fill="x", padx=5, pady=5)
+        creation_header.grid_columnconfigure(1, weight=1)
+        
+        # Toggle button
+        self.series_creation_collapsed = False
+        self.creation_toggle_btn = ctk.CTkButton(
+            creation_header,
+            text="▼",
+            width=30,
+            height=25,
+            command=self.toggle_series_creation,
+            font=('Arial', 12)
+        )
+        self.creation_toggle_btn.grid(row=0, column=0, padx=(5, 10), pady=2)
+        
+        # Title label
+        ctk.CTkLabel(creation_header, text="➕ Create New Series", font=("", 12, "bold")).grid(row=0, column=1, sticky="w", pady=2)
+        
+        # Content frame (collapsible)
+        self.creation_frame = ctk.CTkFrame(creation_container)
+        self.creation_frame.pack(fill="x", padx=5, pady=(0, 5))
 
-        # Series configuration frame
-        config_frame = ctk.CTkFrame(parent)
-        config_frame.pack(fill="x", padx=5, pady=5)
+        # File selection
+        file_frame = ctk.CTkFrame(self.creation_frame)
+        file_frame.pack(fill="x", padx=5, pady=2)
+        ctk.CTkLabel(file_frame, text="Source File:", width=80).pack(side="left", padx=5)
+        self.series_file_var = ctk.StringVar()
+        self.series_file_combo = ctk.CTkComboBox(file_frame, variable=self.series_file_var,
+                                                 command=self.on_file_selected, width=160)
+        self.series_file_combo.pack(side="left", fill="x", expand=True, padx=5)
 
-        # Series name
-        ctk.CTkLabel(config_frame, text="Series Name:").grid(row=0, column=0, sticky="w", padx=5, pady=2)
-        self.series_name_entry = ctk.CTkEntry(config_frame, textvariable=self.series_name_var)
-        self.series_name_entry.grid(row=0, column=1, sticky="ew", padx=5, pady=2)
+        # Column selection
+        col_frame = ctk.CTkFrame(self.creation_frame)
+        col_frame.pack(fill="x", padx=5, pady=2)
+        
+        x_frame = ctk.CTkFrame(col_frame)
+        x_frame.pack(fill="x", pady=1)
+        ctk.CTkLabel(x_frame, text="X Column:", width=60).pack(side="left", padx=5)
+        self.series_x_combo = ctk.CTkComboBox(x_frame, width=120)
+        self.series_x_combo.pack(side="left", fill="x", expand=True, padx=5)
 
-        # Source file
-        ctk.CTkLabel(config_frame, text="Source File:").grid(row=1, column=0, sticky="w", padx=5, pady=2)
-        self.series_file_combo = ctk.CTkComboBox(config_frame, variable=self.series_file_var,
-                                                 command=self.on_file_selected)
-        self.series_file_combo.grid(row=1, column=1, sticky="ew", padx=5, pady=2)
+        y_frame = ctk.CTkFrame(col_frame)
+        y_frame.pack(fill="x", pady=1)
+        ctk.CTkLabel(y_frame, text="Y Column:", width=60).pack(side="left", padx=5)
+        self.series_y_combo = ctk.CTkComboBox(y_frame, width=120)
+        self.series_y_combo.pack(side="left", fill="x", expand=True, padx=5)
 
-        # Sheet selection (for Excel files)
-        ctk.CTkLabel(config_frame, text="Sheet:").grid(row=2, column=0, sticky="w", padx=5, pady=2)
-        self.series_sheet_combo = ctk.CTkComboBox(config_frame, variable=self.series_sheet_var,
-                                                  command=self.on_sheet_selected)
-        self.series_sheet_combo.grid(row=2, column=1, sticky="ew", padx=5, pady=2)
+        # Series name and data range
+        name_frame = ctk.CTkFrame(self.creation_frame)
+        name_frame.pack(fill="x", padx=5, pady=2)
+        ctk.CTkLabel(name_frame, text="Name:", width=50).pack(side="left", padx=5)
+        self.series_name_var = ctk.StringVar(value="Series 1")
+        ctk.CTkEntry(name_frame, textvariable=self.series_name_var, width=150).pack(side="left", fill="x", expand=True, padx=5)
 
-        # X Column
-        ctk.CTkLabel(config_frame, text="X Column:").grid(row=3, column=0, sticky="w", padx=5, pady=2)
-        self.series_x_combo = ctk.CTkComboBox(config_frame, variable=self.series_x_var)
-        self.series_x_combo.grid(row=3, column=1, sticky="ew", padx=5, pady=2)
-
-        # Y Column
-        ctk.CTkLabel(config_frame, text="Y Column:").grid(row=4, column=0, sticky="w", padx=5, pady=2)
-        self.series_y_combo = ctk.CTkComboBox(config_frame, variable=self.series_y_var)
-        self.series_y_combo.grid(row=4, column=1, sticky="ew", padx=5, pady=2)
-
-        # Row range
-        range_frame = ctk.CTkFrame(config_frame)
-        range_frame.grid(row=5, column=0, columnspan=2, sticky="ew", padx=5, pady=5)
-
-        ctk.CTkLabel(range_frame, text="Rows:").pack(side="left", padx=5)
-        self.series_start_entry = ctk.CTkEntry(range_frame, textvariable=self.series_start_var,
-                                               width=60, placeholder_text="Start")
-        self.series_start_entry.pack(side="left", padx=2)
-        ctk.CTkLabel(range_frame, text="to").pack(side="left", padx=2)
-        self.series_end_entry = ctk.CTkEntry(range_frame, textvariable=self.series_end_var,
-                                             width=60, placeholder_text="End")
-        self.series_end_entry.pack(side="left", padx=2)
+        # Data range controls with visual selection
+        range_frame = ctk.CTkFrame(self.creation_frame)
+        range_frame.pack(fill="x", padx=5, pady=2)
+        
+        ctk.CTkLabel(range_frame, text="Data Range:", font=("", 11, "bold")).pack(anchor="w", padx=5, pady=2)
+        
+        # Data context info
+        self.data_context_label = ctk.CTkLabel(
+            range_frame,
+            text="Select a file to see data range options",
+            font=("", 9),
+            text_color="gray"
+        )
+        self.data_context_label.pack(anchor="w", padx=5)
+        
+        # Numeric range controls
+        range_controls = ctk.CTkFrame(range_frame)
+        range_controls.pack(fill="x", padx=5, pady=2)
+        
+        ctk.CTkLabel(range_controls, text="Start:", width=50).pack(side="left", padx=2)
+        self.series_start_var = ctk.StringVar(value="0")
+        self.start_entry = ctk.CTkEntry(range_controls, textvariable=self.series_start_var, width=80)
+        self.start_entry.pack(side="left", padx=2)
+        self.series_start_var.trace("w", self.on_start_entry_change)
+        
+        ctk.CTkLabel(range_controls, text="End:", width=30).pack(side="left", padx=2)
+        self.series_end_var = ctk.StringVar()
+        self.end_entry = ctk.CTkEntry(range_controls, textvariable=self.series_end_var, width=80)
+        self.end_entry.pack(side="left", padx=2)
+        self.series_end_var.trace("w", self.on_end_entry_change)
+        
+        # Visual range sliders - Dual-handle for space efficiency
+        slider_frame = ctk.CTkFrame(range_frame)
+        slider_frame.pack(fill="x", padx=5, pady=2)
+        
+        # Create start and end variables for dual slider
+        self.start_var = tk.IntVar(value=0)
+        self.end_var = tk.IntVar(value=100)
+        
+        # Dual-handle range slider
+        self.dual_range_slider = DualHandleRangeSlider(
+            slider_frame,
+            from_=0,
+            to=100,
+            start_var=self.start_var,
+            end_var=self.end_var,
+            start_command=self.on_start_slider_change,
+            end_command=self.on_end_slider_change,
+            height=70
+        )
+        self.dual_range_slider.pack(fill="x", padx=5, pady=5)
+        self.dual_range_slider.pack(fill="x", padx=5, pady=5)
+        
+        # Quick selection buttons
+        quick_btn_frame = ctk.CTkFrame(range_frame)
+        quick_btn_frame.pack(fill="x", padx=5, pady=2)
+        
+        ctk.CTkButton(quick_btn_frame, text="All Data", width=70, height=25,
+                      command=self.select_all_series_data).pack(side="left", padx=1)
+        ctk.CTkButton(quick_btn_frame, text="First 10%", width=70, height=25,
+                      command=self.select_first_10_percent).pack(side="left", padx=1)
+        ctk.CTkButton(quick_btn_frame, text="Last 10%", width=70, height=25,
+                      command=self.select_last_10_percent).pack(side="left", padx=1)
+        ctk.CTkButton(quick_btn_frame, text="Middle 50%", width=80, height=25,
+                      command=self.select_middle_50_percent).pack(side="left", padx=1)
+        
+        # Selection info
+        self.selection_info_label = ctk.CTkLabel(
+            range_frame,
+            text="",
+            font=("", 9),
+            text_color="gray"
+        )
+        self.selection_info_label.pack(anchor="w", padx=5, pady=2)
 
         # Action buttons
-        button_frame = ctk.CTkFrame(config_frame)
-        button_frame.grid(row=6, column=0, columnspan=2, sticky="ew", padx=5, pady=5)
+        action_frame = ctk.CTkFrame(self.creation_frame)
+        action_frame.pack(fill="x", padx=5, pady=5)
+        
+        ctk.CTkButton(action_frame, text="📋 Preview Data", 
+                      command=self.preview_series_data, width=100).pack(side="left", padx=2)
+        ctk.CTkButton(action_frame, text="➕ Add Series", 
+                      command=self.add_series_from_form, width=100).pack(side="right", padx=2)
 
-        ctk.CTkButton(button_frame, text="Advanced...", command=self.show_advanced_series_config,
-                      width=80).pack(side="left", padx=2)
-        ctk.CTkButton(button_frame, text="Add Series", command=self.add_series_from_form,
-                      fg_color=ColorPalette.SUCCESS, width=80).pack(side="right", padx=2)
+        # === SERIES MANAGEMENT SECTION ===
+        management_frame = ctk.CTkFrame(main_container)
+        management_frame.pack(fill="both", expand=True, pady=(0, 10))
 
-        config_frame.grid_columnconfigure(1, weight=1)
+        # Header with series count and management buttons
+        mgmt_header = ctk.CTkFrame(management_frame)
+        mgmt_header.pack(fill="x", padx=5, pady=5)
+
+        ctk.CTkLabel(mgmt_header, text="📊 Active Series", font=("", 12, "bold")).pack(side="left")
+        self.series_count_label = ctk.CTkLabel(mgmt_header, text="(0 total)", font=("", 10))
+        self.series_count_label.pack(side="left", padx=(5, 0))
+
+        # Management buttons
+        mgmt_buttons = ctk.CTkFrame(mgmt_header)
+        mgmt_buttons.pack(side="right")
+        
+        ctk.CTkButton(mgmt_buttons, text="👁️", width=30, height=25,
+                      command=self.show_all_series).pack(side="left", padx=1)
+        ctk.CTkButton(mgmt_buttons, text="🚫", width=30, height=25,
+                      command=self.hide_all_series).pack(side="left", padx=1)
+        ctk.CTkButton(mgmt_buttons, text="🔄", width=30, height=25,
+                      command=self.refresh_plot).pack(side="left", padx=1)
 
         # Series list
-        ctk.CTkLabel(parent, text="Active Series:", font=("", 12, "bold")).pack(anchor="w", padx=5, pady=(10, 5))
+        self.series_scroll = ctk.CTkScrollableFrame(management_frame)
+        self.series_scroll.pack(fill="both", expand=True, padx=5, pady=(0, 5))
 
-        # Series list frame with scrollbar
-        self.series_scroll = ctk.CTkScrollableFrame(parent)
-        self.series_scroll.pack(fill="both", expand=True, padx=5, pady=5)
-
-        # Store series cards
+        # Store series cards and tracking
         self.series_cards = {}
+        self.selected_series = None
+        self.series_visibility_vars = {}
 
-    def create_config_panel(self, parent):
-        """Create the plot configuration panel"""
-        # Create scrollable frame for config
-        config_scroll = ctk.CTkScrollableFrame(parent)
-        config_scroll.pack(fill="both", expand=True, padx=5, pady=5)
-
-        # Title section
-        title_frame = ctk.CTkFrame(config_scroll)
-        title_frame.pack(fill="x", padx=5, pady=5)
-
-        ctk.CTkLabel(title_frame, text="Plot Title", font=("", 12, "bold")).pack(anchor="w")
-        self.title_entry = ctk.CTkEntry(title_frame, textvariable=self.title_var)
-        self.title_entry.pack(fill="x", pady=2)
-
-        size_frame = ctk.CTkFrame(title_frame)
-        size_frame.pack(fill="x", pady=2)
-        ctk.CTkLabel(size_frame, text="Size:").pack(side="left", padx=5)
-        ctk.CTkSlider(size_frame, from_=8, to=24, variable=self.title_size_var).pack(side="left", fill="x", expand=True)
-        ctk.CTkLabel(size_frame, textvariable=self.title_size_var).pack(side="left", padx=5)
-
-        # Axes section
-        axes_frame = ctk.CTkFrame(config_scroll)
-        axes_frame.pack(fill="x", padx=5, pady=5)
-
-        ctk.CTkLabel(axes_frame, text="Axes Labels", font=("", 12, "bold")).pack(anchor="w")
-
-        # X-axis
-        ctk.CTkLabel(axes_frame, text="X Label:").pack(anchor="w", pady=2)
-        self.xlabel_entry = ctk.CTkEntry(axes_frame, textvariable=self.xlabel_var)
-        self.xlabel_entry.pack(fill="x", pady=2)
-
-        # Y-axis
-        ctk.CTkLabel(axes_frame, text="Y Label:").pack(anchor="w", pady=2)
-        self.ylabel_entry = ctk.CTkEntry(axes_frame, textvariable=self.ylabel_var)
-        self.ylabel_entry.pack(fill="x", pady=2)
-
-        # Scale options
-        scale_frame = ctk.CTkFrame(config_scroll)
-        scale_frame.pack(fill="x", padx=5, pady=5)
-
-        ctk.CTkLabel(scale_frame, text="Scale Options", font=("", 12, "bold")).pack(anchor="w")
-        ctk.CTkCheckBox(scale_frame, text="Log Scale X", variable=self.log_scale_x_var,
-                        command=self.create_plot).pack(anchor="w", pady=2)
-        ctk.CTkCheckBox(scale_frame, text="Log Scale Y", variable=self.log_scale_y_var,
-                        command=self.create_plot).pack(anchor="w", pady=2)
-
-        # Grid options
-        grid_frame = ctk.CTkFrame(config_scroll)
-        grid_frame.pack(fill="x", padx=5, pady=5)
-
-        ctk.CTkLabel(grid_frame, text="Grid Options", font=("", 12, "bold")).pack(anchor="w")
-        ctk.CTkCheckBox(grid_frame, text="Show Grid", variable=self.show_grid_var,
-                        command=self.create_plot).pack(anchor="w", pady=2)
-
-        style_frame = ctk.CTkFrame(grid_frame)
-        style_frame.pack(fill="x", pady=2)
-        ctk.CTkLabel(style_frame, text="Style:").pack(side="left", padx=5)
-        ctk.CTkComboBox(style_frame, values=["-", "--", ":", "-."],
-                        variable=self.grid_style_var, width=80).pack(side="left", padx=5)
-
-        alpha_frame = ctk.CTkFrame(grid_frame)
-        alpha_frame.pack(fill="x", pady=2)
-        ctk.CTkLabel(alpha_frame, text="Alpha:").pack(side="left", padx=5)
-        ctk.CTkSlider(alpha_frame, from_=0, to=1, variable=self.grid_alpha_var).pack(side="left", fill="x", expand=True)
-
-        # Legend options
-        legend_frame = ctk.CTkFrame(config_scroll)
-        legend_frame.pack(fill="x", padx=5, pady=5)
-
-        ctk.CTkLabel(legend_frame, text="Legend", font=("", 12, "bold")).pack(anchor="w")
-        ctk.CTkCheckBox(legend_frame, text="Show Legend", variable=self.show_legend_var,
-                        command=self.create_plot).pack(anchor="w", pady=2)
-
-        # Figure size
-        size_frame = ctk.CTkFrame(config_scroll)
-        size_frame.pack(fill="x", padx=5, pady=5)
-
-        ctk.CTkLabel(size_frame, text="Figure Size", font=("", 12, "bold")).pack(anchor="w")
-
-        width_frame = ctk.CTkFrame(size_frame)
-        width_frame.pack(fill="x", pady=2)
-        ctk.CTkLabel(width_frame, text="Width:").pack(side="left", padx=5)
-        ctk.CTkSlider(width_frame, from_=8, to=20, variable=self.fig_width_var).pack(side="left", fill="x", expand=True)
-        ctk.CTkLabel(width_frame, textvariable=self.fig_width_var).pack(side="left", padx=5)
-
-        height_frame = ctk.CTkFrame(size_frame)
-        height_frame.pack(fill="x", pady=2)
-        ctk.CTkLabel(height_frame, text="Height:").pack(side="left", padx=5)
-        ctk.CTkSlider(height_frame, from_=6, to=12, variable=self.fig_height_var).pack(side="left", fill="x",
-                                                                                       expand=True)
-        ctk.CTkLabel(height_frame, textvariable=self.fig_height_var).pack(side="left", padx=5)
-
-        # Action buttons
-        button_frame = ctk.CTkFrame(config_scroll)
-        button_frame.pack(fill="x", padx=5, pady=10)
-
-        ctk.CTkButton(button_frame, text="Advanced Config...", command=self.show_plot_config).pack(fill="x", pady=2)
-        ctk.CTkButton(button_frame, text="Apply Changes", command=self.create_plot,
-                      fg_color=ColorPalette.SUCCESS).pack(fill="x", pady=2)
-        ctk.CTkButton(button_frame, text="Reset Defaults", command=self.reset_plot_config).pack(fill="x", pady=2)
-
+    def refresh_plot(self):
+        """Refresh the current plot"""
+        if hasattr(self, 'figure') and self.figure and self.all_series:
+            self.create_plot()
+            self.status_bar.set_status("Plot refreshed", "success")
+        else:
+            self.status_bar.set_status("No plot to refresh", "warning")
+    def toggle_series_creation(self):
+        """Toggle the visibility of the series creation section"""
+        self.series_creation_collapsed = not self.series_creation_collapsed
+        
+        if self.series_creation_collapsed:
+            self.creation_frame.pack_forget()
+            self.creation_toggle_btn.configure(text="▶")
+        else:
+            self.creation_frame.pack(fill="x", padx=5, pady=(0, 5))
+            self.creation_toggle_btn.configure(text="▼")
+    
+    def sync_start_var_to_text(self, *args):
+        """Sync start slider value to text entry"""
+        try:
+            start_val = self.start_var.get()
+            self.series_start_var.set(str(start_val))
+        except:
+            pass
+    
+    def sync_end_var_to_text(self, *args):
+        """Sync end slider value to text entry"""
+        try:
+            end_val = self.end_var.get()
+            self.series_end_var.set(str(end_val))
+        except:
+            pass
+    
     def create_export_panel(self, parent):
         """Create export controls panel"""
         # Export options
@@ -611,20 +697,27 @@ class ExcelDataPlotter(ctk.CTk):
         )
 
         if filenames:
+            self.status_bar.set_status(f"Loading {len(filenames)} file(s)...", "info")
             self.status_bar.show_progress()
             success_count = 0
             error_files = []
 
             for i, filename in enumerate(filenames):
+                # Update progress
+                progress = i / len(filenames)
+                self.status_bar.show_progress(progress)
+                self.status_bar.set_status(f"Loading file {i+1}/{len(filenames)}: {os.path.basename(filename)}", "info")
+                
+                # Force UI update
+                self.update_idletasks()
                 try:
-                    progress = (i + 1) / len(filenames)
-                    self.status_bar.show_progress(progress)
-                    self.status_bar.set_status(f"Loading: {os.path.basename(filename)}", "info")
-
                     # Load file using FileManager for proper handling
                     file_data = self.file_manager.load_file(filename)
 
                     if file_data:
+                        # Ensure series_list exists (for backward compatibility)
+                        if not hasattr(file_data, 'series_list'):
+                            file_data.series_list = []
                         # Store with proper ID
                         self.loaded_files[file_data.id] = file_data
                         self.add_file_card(file_data)
@@ -644,6 +737,9 @@ class ExcelDataPlotter(ctk.CTk):
                             filename=os.path.basename(filename)  # optional filename
                         )
 
+                        # Ensure series_list exists (for backward compatibility)
+                        if not hasattr(file_data, 'series_list'):
+                            file_data.series_list = []
                         self.loaded_files[file_data.id] = file_data
                         self.add_file_card(file_data)
                         success_count += 1
@@ -726,20 +822,83 @@ class ExcelDataPlotter(ctk.CTk):
             return
 
         series_name = self.series_name_var.get()
-        series = SeriesConfig(series_name, matching_file_id, x_col, y_col, start_idx, end_idx)
+        series = SeriesConfig(
+            name=series_name,
+            file_id=matching_file_id,
+            x_column=x_col,
+            y_column=y_col,
+            start_index=start_idx,
+            end_index=end_idx
+        )
 
+        # Set visualization properties
         series.color = self.auto_colors[self.color_index % len(self.auto_colors)]
+        series.show_in_legend = True
+        series.legend_label = series_name
+        series.visible = True  # Explicitly ensure visibility
+        series.alpha = 1.0
+        series.z_order = 1
         self.color_index += 1
+        
+        # Debug logging
+        logger.info(f"Created series '{series_name}' with visible={series.visible}")
 
         self.all_series[series.id] = series
+        
+        # Ensure series_list exists (for backward compatibility)
+        if not hasattr(matching_file, 'series_list'):
+            matching_file.series_list = []
         matching_file.series_list.append(series.id)
 
-        self.update_series_display()
+        self.add_series_card(series)  # Add visual card
         self.update_counts()
+
+        # Show data preview for the series just added
+        self.preview_series_data(series, matching_file)
 
         self.series_name_var.set(f"Series {len(self.all_series) + 1}")
 
         self.status_bar.set_status(f"Added series: {series_name}", "success")
+    
+    def preview_series_data(self, series, file_data):
+        """Show a preview of the series data being added to help users understand their selection"""
+        try:
+            # Get the data slice for this series
+            start_idx = max(0, series.start_index or 0)
+            end_idx = min(len(file_data.df), series.end_index or len(file_data.df))
+            
+            if start_idx >= end_idx:
+                return
+                
+            data_slice = file_data.df.iloc[start_idx:end_idx].copy()
+            
+            # Get X and Y data
+            if series.x_column == 'Index':
+                x_data = np.arange(start_idx, end_idx)
+                x_preview = x_data[:5]  # First 5 values
+            else:
+                x_data = data_slice[series.x_column]
+                x_preview = x_data.head()
+                
+            y_data = data_slice[series.y_column]
+            y_preview = y_data.head()
+            
+            # Create preview message
+            preview_msg = (f"Series '{series.name}' Preview:\n"
+                         f"X Column: {series.x_column}\n"
+                         f"Y Column: {series.y_column}\n"
+                         f"Data points: {len(y_data)}\n"
+                         f"Range: {start_idx} to {end_idx}\n"
+                         f"First 5 Y values: {', '.join([f'{val:.3f}' if pd.notna(val) else 'NaN' for val in y_preview])}")
+            
+            # Update status with data info
+            data_info = f"Added '{series.name}': {len(y_data)} points from {series.y_column}"
+            self.status_bar.set_status(data_info, "success")
+            
+            logger.info(preview_msg)
+            
+        except Exception as e:
+            logger.error(f"Error creating series preview: {e}")
 
     def remove_file(self, file_data):
         """Remove a file and its associated series"""
@@ -850,7 +1009,15 @@ class ExcelDataPlotter(ctk.CTk):
 
     def update_series_file_combo(self):
         """Update the file selection combo for series creation"""
-        file_options = [f"{fd.filename} ({fd.id[:8]})" for fd in self.loaded_files.values()]
+        # Create mapping from display text to actual file ID
+        self.file_id_mapping = {}
+        file_options = []
+        
+        for file_id, file_data in self.loaded_files.items():
+            display_text = f"{file_data.filename} ({file_id[:8]})"
+            file_options.append(display_text)
+            self.file_id_mapping[display_text] = file_id
+        
         self.series_file_combo.configure(values=file_options)
         if file_options and not self.series_file_var.get():
             self.series_file_combo.set(file_options[0])
@@ -863,12 +1030,18 @@ class ExcelDataPlotter(ctk.CTk):
             return
 
         try:
-            file_id = selection.split('(')[-1].rstrip(')')
-            matching_file = None
-            for fid, fdata in self.loaded_files.items():
-                if fid.startswith(file_id):
-                    matching_file = fdata
-                    break
+            # Use the file ID mapping to get the actual file ID
+            if hasattr(self, 'file_id_mapping') and selection in self.file_id_mapping:
+                file_id = self.file_id_mapping[selection]
+                matching_file = self.loaded_files.get(file_id)
+            else:
+                # Fallback to old method for compatibility
+                file_id = selection.split('(')[-1].rstrip(')')
+                matching_file = None
+                for fid, fdata in self.loaded_files.items():
+                    if fid.startswith(file_id):
+                        matching_file = fdata
+                        break
 
             if matching_file:
                 actual_columns = matching_file.df.columns.tolist()
@@ -878,7 +1051,19 @@ class ExcelDataPlotter(ctk.CTk):
                 self.series_y_combo.configure(values=columns)
 
                 max_rows = len(matching_file.df)
-                self.series_end_var.set(str(min(1000, max_rows)))
+                
+                # Initialize range controls
+                self.series_start_var.set("0")
+                self.series_end_var.set(str(max_rows))
+                
+                # Initialize dual range slider
+                self.dual_range_slider.configure_range(from_=0, to=max_rows-1)
+                self.start_var.set(0)
+                self.end_var.set(max_rows)
+                
+                # Update data context info
+                self.data_context_label.configure(text=f"Total data points available: {max_rows:,}")
+                self.update_selection_info()
 
                 if columns:
                     self.series_x_combo.set('Index')
@@ -892,6 +1077,13 @@ class ExcelDataPlotter(ctk.CTk):
 
                     if numeric_cols:
                         self.series_y_combo.set(numeric_cols[0])
+                
+                # Show data info in status
+                self.status_bar.set_status(
+                    f"File: {matching_file.filename} | {len(matching_file.df):,} rows, {len(matching_file.df.columns)} cols | "
+                    f"Numeric columns: {len([c for c in actual_columns if pd.api.types.is_numeric_dtype(matching_file.df[c])])}", 
+                    "info"
+                )
         except Exception as e:
             logger.error(f"File selection error: {e}")
             self.status_bar.set_status(f"File selection error: {str(e)}", "error")
@@ -961,13 +1153,20 @@ class ExcelDataPlotter(ctk.CTk):
             self.status_bar.set_status("Please select both X and Y columns", "warning")
             return
 
-        file_id = selection.split('(')[-1].rstrip(')')
-        matching_file = None
-        for fid, fdata in self.loaded_files.items():
-            if fid.startswith(file_id):
-                matching_file = fdata
-                matching_file_id = fid
-                break
+        # Use the file ID mapping to get the actual file ID
+        if hasattr(self, 'file_id_mapping') and selection in self.file_id_mapping:
+            matching_file_id = self.file_id_mapping[selection]
+            matching_file = self.loaded_files.get(matching_file_id)
+        else:
+            # Fallback to old method for compatibility
+            file_id = selection.split('(')[-1].rstrip(')')
+            matching_file = None
+            matching_file_id = None
+            for fid, fdata in self.loaded_files.items():
+                if fid.startswith(file_id):
+                    matching_file = fdata
+                    matching_file_id = fid
+                    break
 
         if not matching_file:
             self.status_bar.set_status("Invalid file selection", "error")
@@ -985,79 +1184,953 @@ class ExcelDataPlotter(ctk.CTk):
             return
 
         series_name = self.series_name_var.get() or f"Series {len(self.all_series) + 1}"
-        series = SeriesConfig(series_name, matching_file_id, x_col, y_col, start_idx, end_idx)
+        
+        # Ensure unique series name
+        original_name = series_name
+        counter = 1
+        while any(s.name == series_name for s in self.all_series.values()):
+            series_name = f"{original_name} ({counter})"
+            counter += 1
+        
+        series = SeriesConfig(
+            name=series_name,
+            file_id=matching_file_id,
+            x_column=x_col,
+            y_column=y_col,
+            start_index=start_idx,
+            end_index=end_idx
+        )
 
+        # Assign unique color from palette
         series.color = self.auto_colors[self.color_index % len(self.auto_colors)]
         self.color_index += 1
-
+        
+        # Store series
+        logger.info(f"Creating new series with ID: {series.id}")
         self.all_series[series.id] = series
         self.add_series_card(series)
+        
+        # Update plot button text
+        self.update_plot_button_text()
 
+        # Update form for next series with incremented name
         self.series_name_var.set(f"Series {len(self.all_series) + 1}")
         self.status_bar.set_status(f"Added series: {series_name}", "success")
 
     def add_series_card(self, series):
-        """Add a series card to the series panel"""
+        """Add an enhanced series card to the series panel with visibility toggle and selection"""
         card = ctk.CTkFrame(self.series_scroll)
         card.pack(fill="x", pady=5, padx=5)
 
-        # Series info
-        info_frame = ctk.CTkFrame(card)
-        info_frame.pack(fill="x", padx=5, pady=5)
+        # Main content frame
+        main_frame = ctk.CTkFrame(card)
+        main_frame.pack(fill="x", padx=5, pady=5)
 
-        ctk.CTkLabel(info_frame, text=series.name, font=("", 12, "bold")).pack(anchor="w")
+        # Header with visibility toggle and selection
+        header_frame = ctk.CTkFrame(main_frame)
+        header_frame.pack(fill="x", pady=(0, 5))
+
+        # Visibility checkbox
+        visibility_var = ctk.BooleanVar(value=getattr(series, 'visible', True))
+        visibility_check = ctk.CTkCheckBox(
+            header_frame, 
+            text="", 
+            variable=visibility_var,
+            width=20,
+            command=lambda: self.toggle_series_visibility(series, visibility_var.get())
+        )
+        visibility_check.pack(side="left", padx=(5, 10))
+
+        # Series name and status
+        name_frame = ctk.CTkFrame(header_frame)
+        name_frame.pack(side="left", fill="x", expand=True)
+        
+        series_title = ctk.CTkLabel(name_frame, text=series.name, font=("", 12, "bold"))
+        series_title.pack(anchor="w")
+        
+        # Color indicator and status
+        status_frame = ctk.CTkFrame(name_frame)
+        status_frame.pack(fill="x", anchor="w")
+        
+        # Color preview box (clickable for quick color change)
+        color_frame = ctk.CTkFrame(status_frame, width=20, height=15, fg_color=series.color)
+        color_frame.pack(side="left", padx=(0, 5))
+        color_frame.pack_propagate(False)
+        
+        # Store reference to color frame for quick updates
+        if not hasattr(self, 'series_color_frames'):
+            self.series_color_frames = {}
+        self.series_color_frames[series.id] = color_frame
+        
+        # Add click handler for quick color change
+        def on_color_click(event):
+            self.quick_change_series_color(series)
+        
+        color_frame.bind("<Button-1>", on_color_click)
+        # Also bind to the color frame's internal canvas if it has one
+        for child in color_frame.winfo_children():
+            child.bind("<Button-1>", on_color_click)
+        
+        # Data info
         file_info = self.loaded_files.get(series.file_id)
         file_name = file_info.filename if file_info else "Unknown File"
-        ctk.CTkLabel(info_frame, text=f"{file_name} | {series.y_column} vs {series.x_column}").pack(anchor="w")
+        data_points = (series.end_index or len(file_info.df)) - (series.start_index or 0) if file_info else 0
+        
+        info_text = f"{file_name} | {series.y_column} vs {series.x_column} | {data_points:,} points"
+        ctk.CTkLabel(status_frame, text=info_text, font=("", 10)).pack(side="left")
+
+        # Selection button for preview
+        preview_btn = ctk.CTkButton(
+            header_frame,
+            text="Preview",
+            width=60,
+            height=25,
+            command=lambda s=series: self.select_and_preview_series(s)
+        )
+        preview_btn.pack(side="right", padx=5)
 
         # Action buttons
-        btn_frame = ctk.CTkFrame(card)
-        btn_frame.pack(fill="x", padx=5, pady=5)
+        btn_frame = ctk.CTkFrame(main_frame)
+        btn_frame.pack(fill="x", pady=(5, 0))
 
         ctk.CTkButton(btn_frame, text="Edit", width=60,
                       command=lambda s=series: self.edit_series(s)).pack(side="left", padx=2)
+        ctk.CTkButton(btn_frame, text="Duplicate", width=70,
+                      command=lambda s=series: self.duplicate_series_real(s)).pack(side="left", padx=2)
         ctk.CTkButton(btn_frame, text="Remove", width=60, fg_color=ColorPalette.ERROR,
                       command=lambda s=series: self.remove_series(s)).pack(side="right", padx=2)
 
-        # Store reference
+        # Store the card reference for future updates
         self.series_cards[series.id] = card
+
+    def toggle_series_visibility(self, series, is_visible):
+        """Toggle the visibility of a series and auto-refresh plot"""
+        try:
+            # Update the series object
+            series.visible = is_visible
+            self.all_series[series.id] = series
+            
+            # Log the change
+            logger.info(f"Series '{series.name}' visibility changed to: {is_visible}")
+            
+            # Update counts display
+            self.update_counts()
+            
+            # Update plot button text to show selected series count
+            self.update_plot_button_text()
+            
+            # Auto-refresh the plot if we have any series and a figure exists
+            if self.all_series and hasattr(self, 'figure') and self.figure:
+                logger.info(f"Auto-refreshing plot due to visibility change for '{series.name}'")
+                # Cancel any pending refresh and schedule a new one to prevent multiple rapid updates
+                if hasattr(self, '_refresh_timer'):
+                    self.after_cancel(self._refresh_timer)
+                self._refresh_timer = self.after(100, self.create_plot)  # Debounce refresh by 100ms
+            else:
+                logger.info(f"Skipping auto-refresh: all_series={len(self.all_series)}, has_figure={hasattr(self, 'figure')}, figure_exists={hasattr(self, 'figure') and self.figure is not None}")
+            
+            # Update status
+            status = "visible" if is_visible else "hidden"
+            self.status_bar.set_status(f"Series '{series.name}' is now {status} - plot updated", "info")
+                
+        except Exception as e:
+            logger.error(f"Error toggling series visibility: {e}")
+
+    def update_plot_button_text(self):
+        """Update the plot button text to show number of selected series"""
+        try:
+            visible_count = len([s for s in self.all_series.values() if getattr(s, 'visible', True)])
+            
+            if visible_count == 0:
+                button_text = "Generate Plot"
+                tooltip = "No series selected for plotting"
+            elif visible_count == 1:
+                button_text = "Generate Plot (1)"
+                tooltip = "Plot 1 selected series"
+            else:
+                button_text = f"Generate Plot ({visible_count})"
+                tooltip = f"Plot {visible_count} selected series"
+            
+            # Update button text if we have a reference to it
+            if hasattr(self, 'plot_button') and self.plot_button:
+                # Note: This depends on the QuickActionBar implementation
+                # We might need to modify this based on how the toolbar buttons work
+                pass
+                
+        except Exception as e:
+            logger.error(f"Error updating plot button text: {e}")
+            self.status_bar.set_status(f"Error toggling visibility: {str(e)}", "error")
+
+    def select_and_preview_series(self, series):
+        """Select a series and show its preview at the bottom of the series panel"""
+        try:
+            # Store currently selected series
+            self.selected_series = series
+            
+            # Update the preview area
+            self.show_series_preview(series)
+            
+            # Highlight the selected card (optional visual feedback)
+            self.highlight_selected_series_card(series)
+            
+            self.status_bar.set_status(f"Selected series: {series.name}", "info")
+            
+        except Exception as e:
+            logger.error(f"Error selecting series: {e}")
+            self.status_bar.set_status(f"Error selecting series: {str(e)}", "error")
+
+    def highlight_selected_series_card(self, selected_series):
+        """Highlight the selected series card"""
+        try:
+            # Reset all cards to normal appearance
+            for series_id, card in self.series_cards.items():
+                if series_id == selected_series.id:
+                    # Highlight selected card
+                    card.configure(fg_color=("gray75", "gray25"))
+                else:
+                    # Normal appearance
+                    card.configure(fg_color=("gray90", "gray13"))
+        except Exception as e:
+            logger.error(f"Error highlighting card: {e}")
+
+    def show_series_preview(self, series):
+        """Show a preview of the selected series data in the preview area"""
+        try:
+            # Clear existing preview content
+            if hasattr(self, 'preview_placeholder'):
+                self.preview_placeholder.destroy()
+            
+            for widget in self.series_preview_frame.winfo_children():
+                widget.destroy()
+            
+            # Get file data
+            file_data = self.loaded_files.get(series.file_id)
+            if not file_data:
+                ctk.CTkLabel(
+                    self.series_preview_frame,
+                    text="File data not available",
+                    text_color="red"
+                ).pack(expand=True)
+                return
+            
+            # Create scrollable content
+            preview_scroll = ctk.CTkScrollableFrame(self.series_preview_frame)
+            preview_scroll.pack(fill="both", expand=True, padx=2, pady=2)
+            
+            # Preview header
+            header_frame = ctk.CTkFrame(preview_scroll)
+            header_frame.pack(fill="x", pady=(0, 5))
+            
+            ctk.CTkLabel(
+                header_frame,
+                text=f"📊 {series.name}",
+                font=("", 12, "bold")
+            ).pack(side="left")
+            
+            # Visibility and color indicator
+            color_frame = ctk.CTkFrame(header_frame, width=15, height=15, fg_color=series.color)
+            color_frame.pack(side="right", padx=(5, 0))
+            color_frame.pack_propagate(False)
+            
+            # Data range and statistics
+            start_idx = series.start_index or 0
+            end_idx = series.end_index or len(file_data.df)
+            data_points = end_idx - start_idx
+            
+            info_frame = ctk.CTkFrame(preview_scroll)
+            info_frame.pack(fill="x", pady=2)
+            
+            info_text = f"📁 {file_data.filename}\n📈 {series.y_column} vs {series.x_column}\n📊 Rows {start_idx:,}-{end_idx:,} ({data_points:,} points)"
+            ctk.CTkLabel(info_frame, text=info_text, font=("", 9), justify="left").pack(anchor="w", padx=5, pady=3)
+            
+            # Quick statistics
+            try:
+                data_slice = file_data.df.iloc[start_idx:end_idx]
+                y_data = data_slice[series.y_column].dropna()
+                
+                if len(y_data) > 0:
+                    stats_frame = ctk.CTkFrame(preview_scroll)
+                    stats_frame.pack(fill="x", pady=2)
+                    
+                    stats_text = f"📈 Min: {y_data.min():.3f} | Max: {y_data.max():.3f} | Mean: {y_data.mean():.3f}"
+                    ctk.CTkLabel(stats_frame, text=stats_text, font=("", 9)).pack(padx=5, pady=2)
+                    
+                    # Data sample (first 5 rows)
+                    sample_frame = ctk.CTkFrame(preview_scroll)
+                    sample_frame.pack(fill="x", pady=2)
+                    
+                    ctk.CTkLabel(sample_frame, text="📋 Data Sample:", font=("", 9, "bold")).pack(anchor="w", padx=5)
+                    
+                    if series.x_column == 'Index':
+                        sample_data = data_slice[[series.y_column]].head(5)
+                        sample_data.insert(0, 'Index', range(start_idx, start_idx + len(sample_data)))
+                    else:
+                        sample_data = data_slice[[series.x_column, series.y_column]].head(5)
+                    
+                    sample_text = sample_data.to_string(index=False, float_format='%.3f')
+                    ctk.CTkLabel(
+                        sample_frame, 
+                        text=sample_text, 
+                        font=("Consolas", 8),
+                        justify="left"
+                    ).pack(anchor="w", padx=5, pady=2)
+                    
+            except Exception as e:
+                ctk.CTkLabel(
+                    preview_scroll,
+                    text=f"⚠️ Preview error: {str(e)}",
+                    text_color="orange",
+                    font=("", 9)
+                ).pack(pady=5)
+            
+        except Exception as e:
+            logger.error(f"Error showing series preview: {e}")
+            ctk.CTkLabel(
+                self.series_preview_frame,
+                text=f"❌ Preview error: {str(e)}",
+                text_color="red"
+            ).pack(expand=True)
+
+    def duplicate_series_real(self, series):
+        """Actually duplicate a series with a new name"""
+        try:
+            # Create a copy of the series
+            new_series = SeriesConfig(
+                name=f"{series.name} (Copy)",
+                file_id=series.file_id,
+                x_column=series.x_column,
+                y_column=series.y_column,
+                start_index=series.start_index,
+                end_index=series.end_index
+            )
+            
+            # Copy all properties
+            for attr in ['color', 'line_style', 'line_width', 'marker', 'marker_size',
+                        'alpha', 'visible', 'show_in_legend', 'legend_label', 'plot_type']:
+                if hasattr(series, attr):
+                    setattr(new_series, attr, getattr(series, attr))
+            
+            # Assign new color
+            new_series.color = self.auto_colors[self.color_index % len(self.auto_colors)]
+            self.color_index += 1
+            
+            # Store the new series
+            self.all_series[new_series.id] = new_series
+            self.add_series_card(new_series)
+            self.update_counts()
+            
+            self.status_bar.set_status(f"Duplicated series: {new_series.name}", "success")
+            
+        except Exception as e:
+            logger.error(f"Error duplicating series: {e}")
+            self.status_bar.set_status(f"Error duplicating series: {str(e)}", "error")
+            
+    def show_all_series(self):
+        """Make all series visible"""
+        try:
+            count = 0
+            for series_id, series in self.all_series.items():
+                if not getattr(series, 'visible', True):
+                    series.visible = True
+                    count += 1
+                    
+                    # Update UI checkbox if it exists
+                    if series_id in self.series_visibility_vars:
+                        self.series_visibility_vars[series_id].set(True)
+            
+            if count > 0:
+                self.status_bar.set_status(f"Made {count} series visible", "success")
+                self.update_counts()  # Update the counts display
+                # Update plot if it exists
+                if hasattr(self, 'figure') and self.figure:
+                    self.create_plot()
+            else:
+                self.status_bar.set_status("All series are already visible", "info")
+                
+        except Exception as e:
+            logger.error(f"Error showing all series: {e}")
+            self.status_bar.set_status(f"Error showing all series: {str(e)}", "error")
+
+    def hide_all_series(self):
+        """Hide all series"""
+        try:
+            count = 0
+            for series_id, series in self.all_series.items():
+                if getattr(series, 'visible', True):
+                    series.visible = False
+                    count += 1
+                    
+                    # Update UI checkbox if it exists
+                    if series_id in self.series_visibility_vars:
+                        self.series_visibility_vars[series_id].set(False)
+            
+            if count > 0:
+                self.status_bar.set_status(f"Hidden {count} series", "success")
+                self.update_counts()  # Update the counts display
+                # Clear plot since no series are visible
+                if hasattr(self, 'figure') and self.figure:
+                    self.clear_plot_area()
+            else:
+                self.status_bar.set_status("All series are already hidden", "info")
+                
+        except Exception as e:
+            logger.error(f"Error hiding all series: {e}")
+            self.status_bar.set_status(f"Error hiding all series: {str(e)}", "error")
+
+    def get_series_summary(self):
+        """Get a summary of all series for display"""
+        try:
+            total_series = len(self.all_series)
+            visible_series = len([s for s in self.all_series.values() if getattr(s, 'visible', True)])
+            hidden_series = total_series - visible_series
+            
+            return {
+                'total': total_series,
+                'visible': visible_series,
+                'hidden': hidden_series
+            }
+        except Exception as e:
+            logger.error(f"Error getting series summary: {e}")
+            return {'total': 0, 'visible': 0, 'hidden': 0}
+
+    def trigger_auto_refresh(self):
+        """Trigger auto-refresh of the plot if auto-refresh is enabled"""
+        try:
+            # Cancel any existing refresh timer
+            if hasattr(self, '_refresh_timer') and self._refresh_timer:
+                self.after_cancel(self._refresh_timer)
+            
+            # Schedule a new refresh with debounce
+            self._refresh_timer = self.after(100, self._auto_refresh_plot)
+            
+        except Exception as e:
+            logger.error(f"Error triggering auto-refresh: {e}")
+
+    def _auto_refresh_plot(self):
+        """Auto-refresh the plot (debounced)"""
+        try:
+            if hasattr(self, '_creating_plot') and self._creating_plot:
+                return  # Skip if plot creation is already in progress
+                
+            self.create_plot()
+        except Exception as e:
+            logger.error(f"Error in auto-refresh: {e}")
+
+    def _finalize_canvas_display(self, canvas_widget):
+        """Finalize canvas display after layout updates"""
+        try:
+            # Final widget state check
+            logger.info(f"Final canvas widget visibility: {canvas_widget.winfo_viewable()}")
+            logger.info(f"Final canvas widget size: {canvas_widget.winfo_width()}x{canvas_widget.winfo_height()}")
+            
+            # Ensure the canvas is visible and properly sized
+            if canvas_widget.winfo_width() <= 1 or canvas_widget.winfo_height() <= 1:
+                logger.warning("Canvas size is too small, forcing update...")
+                # Force the parent frame to update its size
+                self.plot_area_frame.update()
+                canvas_widget.update()
+                
+                # Try to redraw the canvas
+                self.canvas.draw()
+                
+                logger.info(f"After forced update - canvas size: {canvas_widget.winfo_width()}x{canvas_widget.winfo_height()}")
+                
+        except Exception as e:
+            logger.error(f"Error finalizing canvas display: {e}")
+
+    def quick_change_series_color(self, series):
+        """Quick color change for a series by clicking the color preview"""
+        try:
+            from tkinter import colorchooser
+            
+            # Open color chooser dialog
+            color = colorchooser.askcolor(
+                color=series.color,
+                title=f"Choose color for {series.name}"
+            )
+            
+            if color[1]:  # color[1] is the hex string, color[0] is RGB tuple
+                # Update series color
+                series.color = color[1]
+                self.all_series[series.id] = series
+                
+                # Update the color in the existing series card instead of recreating
+                self.update_series_card_color(series)
+                
+                # Trigger auto-refresh if enabled
+                self.trigger_auto_refresh()
+                
+                self.status_bar.set_status(f"Updated color for {series.name}", "success")
+                
+        except Exception as e:
+            logger.error(f"Error changing series color: {e}")
+            self.status_bar.set_status(f"Error changing color: {str(e)}", "error")
+
+    def update_series_card_color(self, series):
+        """Update the color preview in an existing series card"""
+        try:
+            # Use stored reference to directly update color frame
+            if (hasattr(self, 'series_color_frames') and 
+                series.id in self.series_color_frames):
+                color_frame = self.series_color_frames[series.id]
+                if color_frame.winfo_exists():
+                    color_frame.configure(fg_color=series.color)
+                    logger.info(f"Updated color frame for series {series.name} to {series.color}")
+                    return
+                    
+            # Fallback: recreate the card if direct update fails
+            logger.warning(f"Color frame reference not found for series {series.id}, recreating card")
+            if series.id in self.series_cards:
+                self.series_cards[series.id].destroy()
+                del self.series_cards[series.id]
+                if hasattr(self, 'series_color_frames') and series.id in self.series_color_frames:
+                    del self.series_color_frames[series.id]
+            self.add_series_card(series)
+            
+        except Exception as e:
+            logger.error(f"Error updating series card color: {e}")
+    
+    def update_series_card(self, series_id, updated_series):
+        """Update an existing series card with new series data"""
+        try:
+            # Remove the old card
+            if series_id in self.series_cards:
+                self.series_cards[series_id].destroy()
+                del self.series_cards[series_id]
+            
+            # Clean up color frame reference
+            if hasattr(self, 'series_color_frames') and series_id in self.series_color_frames:
+                del self.series_color_frames[series_id]
+            
+            # Create new card with updated data
+            self.add_series_card(updated_series)
+            
+            logger.info(f"Updated series card for '{updated_series.name}'")
+            
+        except Exception as e:
+            logger.error(f"Error updating series card: {e}")
+            # Fallback: just create a new card
+            self.add_series_card(updated_series)
+
+    def _update_color_frame_in_widget(self, widget, new_color):
+        """Recursively find and update color frame in widget hierarchy"""
+        try:
+            # Check if this widget is a color frame (has specific size and color)
+            if (hasattr(widget, 'cget') and 
+                hasattr(widget, 'configure') and
+                widget.winfo_width() == 20 and 
+                widget.winfo_height() == 15):
+                widget.configure(fg_color=new_color)
+                return True
+                
+            # Recursively check children
+            for child in widget.winfo_children():
+                if self._update_color_frame_in_widget(child, new_color):
+                    return True
+                    
+        except Exception as e:
+            logger.debug(f"Error checking widget for color frame: {e}")
+        
+        return False
 
     def edit_series(self, series):
         """Edit an existing series"""
-        dialog = SeriesConfigDialog(self, series, self.loaded_files[series.file_id])
-        self.wait_window(dialog.dialog)
+        # Check if the file still exists
+        if series.file_id not in self.loaded_files:
+            self.status_bar.set_status(f"File for series '{series.name}' no longer available", "error")
+            messagebox.showerror("Error", f"The source file for series '{series.name}' is no longer loaded.")
+            return
+            
+        try:
+            file_data = self.loaded_files[series.file_id]
+            
+            # Define callback for immediate apply action
+            def on_series_configured(updated_config):
+                """Handle immediate apply of series configuration"""
+                try:
+                    # Preserve the original series ID
+                    updated_config.id = series.id
+                    
+                    # Update the series in the dictionary
+                    self.all_series[series.id] = updated_config
+                    
+                    # Update the visual card
+                    self.update_series_card(series.id, updated_config)
+                    
+                    # Refresh the plot
+                    self.refresh_plot()
+                    
+                    self.status_bar.set_status(f"Applied changes to series '{updated_config.name}'", "success")
+                    
+                except Exception as e:
+                    logger.error(f"Error applying series configuration: {e}")
+                    self.status_bar.set_status("Failed to apply series configuration", "error")
+            
+            # Create dialog instance with callback
+            dialog = EnhancedSeriesDialog(self, file_data, series, on_series_configured)
+            dialog_result = dialog.show_dialog()
+            
+            # No additional processing needed - the callback handles all updates
+            logger.info(f"Series configuration dialog result: {dialog_result}")
+            
+        except KeyError as e:
+            logger.error(f"KeyError in edit_series: {e}")
+            self.status_bar.set_status(f"Error: File ID {series.file_id} not found", "error")
+            messagebox.showerror("Error", f"Cannot find file for series '{series.name}'. File may have been removed.")
+        except Exception as e:
+            logger.error(f"Error editing series: {e}")
+            self.status_bar.set_status(f"Error editing series: {str(e)}", "error")
+            messagebox.showerror("Error", f"Failed to edit series: {str(e)}")
 
-        if dialog.result == "apply":
-            self.series_cards[series.id].destroy()
-            self.add_series_card(series)
-            self.status_bar.set_status(f"Configured series: {series.name}", "success")
+    def update_series_display_from_enhanced_config(self, updated_series):
+        """Update main UI to reflect changes from enhanced series configuration"""
+        try:
+            # Update the current series form if this series is selected
+            current_selection = self.series_file_var.get()
+            if current_selection:
+                # Check if the updated series belongs to the currently selected file
+                if hasattr(self, 'file_id_mapping') and current_selection in self.file_id_mapping:
+                    file_id = self.file_id_mapping[current_selection]
+                    if file_id == updated_series.file_id:
+                        # Update form fields to reflect the series configuration
+                        self.series_name_var.set(updated_series.name)
+                        self.series_x_combo.set(updated_series.x_column)
+                        self.series_y_combo.set(updated_series.y_column)
+                        self.series_start_var.set(str(updated_series.start_index or 0))
+                        self.series_end_var.set(str(updated_series.end_index or ""))
+                        
+        except Exception as e:
+            logger.error(f"Error updating series display: {e}")
+
+    def select_all_series_data(self):
+        """Select all available data for the current file"""
+        selection = self.series_file_var.get()
+        if not selection:
+            self.status_bar.set_status("Please select a file first", "warning")
+            return
+            
+        try:
+            if hasattr(self, 'file_id_mapping') and selection in self.file_id_mapping:
+                file_id = self.file_id_mapping[selection]
+                matching_file = self.loaded_files.get(file_id)
+                if matching_file:
+                    total_points = len(matching_file.df)
+                    self.series_start_var.set("0")
+                    self.series_end_var.set(str(total_points))
+                    self.start_var.set(0)
+                    self.end_var.set(total_points)
+                    self.update_selection_info()
+                    self.status_bar.set_status(f"Selected all {total_points:,} rows", "info")
+        except Exception as e:
+            logger.error(f"Error selecting all data: {e}")
+
+    def select_first_10_percent(self):
+        """Select first 10% of data"""
+        selection = self.series_file_var.get()
+        if not selection:
+            self.status_bar.set_status("Please select a file first", "warning")
+            return
+            
+        try:
+            if hasattr(self, 'file_id_mapping') and selection in self.file_id_mapping:
+                file_id = self.file_id_mapping[selection]
+                matching_file = self.loaded_files.get(file_id)
+                if matching_file:
+                    total_points = len(matching_file.df)
+                    ten_percent = max(1, int(total_points * 0.1))
+                    self.series_start_var.set("0")
+                    self.series_end_var.set(str(ten_percent))
+                    self.start_var.set(0)
+                    self.end_var.set(ten_percent)
+                    self.update_selection_info()
+                    self.status_bar.set_status(f"Selected first 10% ({ten_percent:,} rows)", "info")
+        except Exception as e:
+            logger.error(f"Error selecting first 10%: {e}")
+
+    def select_last_10_percent(self):
+        """Select last 10% of data"""
+        selection = self.series_file_var.get()
+        if not selection:
+            self.status_bar.set_status("Please select a file first", "warning")
+            return
+            
+        try:
+            if hasattr(self, 'file_id_mapping') and selection in self.file_id_mapping:
+                file_id = self.file_id_mapping[selection]
+                matching_file = self.loaded_files.get(file_id)
+                if matching_file:
+                    total_points = len(matching_file.df)
+                    ten_percent = max(1, int(total_points * 0.1))
+                    start_point = total_points - ten_percent
+                    self.series_start_var.set(str(start_point))
+                    self.series_end_var.set(str(total_points))
+                    self.start_var.set(start_point)
+                    self.end_var.set(total_points)
+                    self.update_selection_info()
+                    self.status_bar.set_status(f"Selected last 10% ({ten_percent:,} rows)", "info")
+        except Exception as e:
+            logger.error(f"Error selecting last 10%: {e}")
+
+    def select_middle_50_percent(self):
+        """Select middle 50% of data"""
+        selection = self.series_file_var.get()
+        if not selection:
+            self.status_bar.set_status("Please select a file first", "warning")
+            return
+            
+        try:
+            if hasattr(self, 'file_id_mapping') and selection in self.file_id_mapping:
+                file_id = self.file_id_mapping[selection]
+                matching_file = self.loaded_files.get(file_id)
+                if matching_file:
+                    total_points = len(matching_file.df)
+                    quarter = total_points // 4
+                    start_point = quarter
+                    end_point = total_points - quarter
+                    self.series_start_var.set(str(start_point))
+                    self.series_end_var.set(str(end_point))
+                    self.start_var.set(start_point)
+                    self.end_var.set(end_point)
+                    self.update_selection_info()
+                    selected_count = end_point - start_point
+                    self.status_bar.set_status(f"Selected middle 50% ({selected_count:,} rows)", "info")
+        except Exception as e:
+            logger.error(f"Error selecting middle 50%: {e}")
+
+    def on_start_entry_change(self, *args):
+        """Handle start entry text changes"""
+        try:
+            start_val = int(self.series_start_var.get())
+            end_val = int(self.series_end_var.get()) if self.series_end_var.get() else start_val + 1
+            
+            # Get current file to validate range
+            selection = self.series_file_var.get()
+            if hasattr(self, 'file_id_mapping') and selection in self.file_id_mapping:
+                file_id = self.file_id_mapping[selection]
+                matching_file = self.loaded_files.get(file_id)
+                if matching_file:
+                    max_val = len(matching_file.df)
+                    start_val = max(0, min(start_val, max_val - 1))
+                    
+                    if start_val >= end_val:
+                        end_val = start_val + 1
+                        self.series_end_var.set(str(end_val))
+                    
+                    # Update dual slider
+                    self.start_var.set(start_val)
+                    self.update_selection_info()
+        except ValueError:
+            pass
+
+    def on_end_entry_change(self, *args):
+        """Handle end entry text changes"""
+        try:
+            end_val = int(self.series_end_var.get())
+            start_val = int(self.series_start_var.get()) if self.series_start_var.get() else 0
+            
+            # Get current file to validate range
+            selection = self.series_file_var.get()
+            if hasattr(self, 'file_id_mapping') and selection in self.file_id_mapping:
+                file_id = self.file_id_mapping[selection]
+                matching_file = self.loaded_files.get(file_id)
+                if matching_file:
+                    max_val = len(matching_file.df)
+                    end_val = max(1, min(end_val, max_val))
+                    
+                    if start_val >= end_val:
+                        start_val = end_val - 1
+                        if start_val < 0:
+                            start_val = 0
+                        self.series_start_var.set(str(start_val))
+                        # Update dual slider
+                        self.start_var.set(start_val)
+                    
+                    # Update dual slider
+                    self.end_var.set(end_val)
+                    self.update_selection_info()
+        except ValueError:
+            pass
+
+    def on_start_slider_change(self, value):
+        """Handle start slider changes"""
+        try:
+            start_val = int(value)
+            # Update text entry to match slider
+            self.series_start_var.set(str(start_val))
+            self.update_selection_info()
+        except ValueError:
+            pass
+
+    def on_end_slider_change(self, value):
+        """Handle end slider changes"""
+        try:
+            end_val = int(value)
+            # Update text entry to match slider
+            self.series_end_var.set(str(end_val))
+            self.update_selection_info()
+        except ValueError:
+            pass
+
+    def update_selection_info(self):
+        """Update the data selection information display"""
+        try:
+            selection = self.series_file_var.get()
+            if not selection or not hasattr(self, 'file_id_mapping') or selection not in self.file_id_mapping:
+                self.selection_info_label.configure(text="")
+                return
+            
+            file_id = self.file_id_mapping[selection]
+            matching_file = self.loaded_files.get(file_id)
+            if not matching_file:
+                return
+            
+            total_points = len(matching_file.df)
+            start_val = int(self.series_start_var.get()) if self.series_start_var.get() else 0
+            end_val = int(self.series_end_var.get()) if self.series_end_var.get() else total_points
+            
+            selected_points = end_val - start_val
+            percentage = (selected_points / total_points) * 100 if total_points > 0 else 0
+            
+            self.selection_info_label.configure(
+                text=f"Selected: {selected_points:,} of {total_points:,} points ({percentage:.1f}%)"
+            )
+        except (ValueError, AttributeError):
+            self.selection_info_label.configure(text="")
+
+    def preview_series_data(self):
+        """Preview the data that would be used for the current series configuration"""
+        selection = self.series_file_var.get()
+        if not selection:
+            self.status_bar.set_status("Please select a source file", "warning")
+            return
+
+        x_col = self.series_x_combo.get()
+        y_col = self.series_y_combo.get()
+
+        if not x_col or not y_col:
+            self.status_bar.set_status("Please select both X and Y columns", "warning")
+            return
+
+        try:
+            # Get file data
+            if hasattr(self, 'file_id_mapping') and selection in self.file_id_mapping:
+                file_id = self.file_id_mapping[selection]
+                matching_file = self.loaded_files.get(file_id)
+            else:
+                return
+                
+            if not matching_file:
+                return
+
+            # Get data range
+            try:
+                start_idx = int(self.series_start_var.get()) if self.series_start_var.get() else 0
+                end_idx = int(self.series_end_var.get()) if self.series_end_var.get() else len(matching_file.df)
+            except ValueError:
+                start_idx = 0
+                end_idx = len(matching_file.df)
+
+            # Create preview dialog
+            preview_dialog = ctk.CTkToplevel(self)
+            preview_dialog.title("Series Data Preview")
+            preview_dialog.geometry("800x600")
+            preview_dialog.transient(self)
+
+            # Preview content
+            preview_frame = ctk.CTkFrame(preview_dialog)
+            preview_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+            # Info header
+            info_text = f"Preview: {y_col} vs {x_col} | Rows {start_idx} to {end_idx} ({end_idx-start_idx} points)"
+            ctk.CTkLabel(preview_frame, text=info_text, font=("", 12, "bold")).pack(pady=5)
+
+            # Data preview
+            data_slice = matching_file.df.iloc[start_idx:end_idx]
+            preview_data = data_slice[[x_col, y_col]].head(100) if x_col != 'Index' else data_slice[[y_col]].head(100)
+            
+            text_widget = ctk.CTkTextbox(preview_frame, font=("Consolas", 10))
+            text_widget.pack(fill="both", expand=True, pady=10)
+            
+            preview_text = f"Data Preview (first 100 rows of {end_idx-start_idx} total):\n\n"
+            preview_text += preview_data.to_string()
+            text_widget.insert("1.0", preview_text)
+            text_widget.configure(state="disabled")
+
+            # Close button
+            ctk.CTkButton(preview_frame, text="Close", command=preview_dialog.destroy).pack(pady=5)
+
+        except Exception as e:
+            logger.error(f"Error previewing data: {e}")
+            messagebox.showerror("Error", f"Failed to preview data: {str(e)}")
 
     def remove_series(self, series):
         """Remove a series"""
         if series.file_id in self.loaded_files:
             file_data = self.loaded_files[series.file_id]
+            # Ensure series_list exists (for backward compatibility)
+            if not hasattr(file_data, 'series_list'):
+                file_data.series_list = []
             if series.id in file_data.series_list:
                 file_data.series_list.remove(series.id)
 
         del self.all_series[series.id]
         self.series_cards[series.id].destroy()
         del self.series_cards[series.id]
+        
+        # Clean up color frame reference
+        if hasattr(self, 'series_color_frames') and series.id in self.series_color_frames:
+            del self.series_color_frames[series.id]
 
         self.update_counts()
         self.status_bar.set_status(f"Removed series: {series.name}", "info")
 
     def create_plot(self):
         """Create the plot with modern styling and professional features"""
+        # Prevent multiple simultaneous plot creation
+        if hasattr(self, '_creating_plot') and self._creating_plot:
+            logger.info("Plot creation already in progress, skipping...")
+            return
+            
         if not self.all_series:
             self.status_bar.set_status("No series defined. Please add at least one series.", "warning")
             return
-
-        visible_series = [s for s in self.all_series.values() if s.visible]
-        if not visible_series:
-            self.status_bar.set_status("No visible series. Please make at least one series visible.", "warning")
-            return
-
+            
+        self._creating_plot = True
+        
         try:
+            # Enhanced debugging for series visibility
+            logger.info(f"=== DETAILED SERIES DEBUG START ===")
+            logger.info(f"Total series in self.all_series: {len(self.all_series)}")
+        
+            for series_id, series in self.all_series.items():
+                logger.info(f"Series ID '{series_id}': name='{series.name}', type={type(series)}")
+                logger.info(f"  hasattr(series, 'visible'): {hasattr(series, 'visible')}")
+                if hasattr(series, 'visible'):
+                    logger.info(f"  series.visible: {series.visible}")
+                else:
+                    logger.info(f"  series.visible: MISSING ATTRIBUTE")
+                logger.info(f"  getattr(series, 'visible', True): {getattr(series, 'visible', True)}")
+                logger.info(f"  file_id: {series.file_id}")
+                logger.info(f"  UUID length: {len(series_id)} characters")
+        
+            visible_series = [s for s in self.all_series.values() if getattr(s, 'visible', True)]
+            
+            logger.info(f"After filtering - visible_series count: {len(visible_series)}")
+            for i, series in enumerate(visible_series):
+                logger.info(f"  Visible series {i+1}: '{series.name}' (ID: {series.id})")
+            logger.info(f"=== DETAILED SERIES DEBUG END ===")
+            
+            if not visible_series:
+                self.status_bar.set_status("No visible series selected. Please check series visibility boxes to plot.", "warning")
+                return
+
+            # Inform user about what's being plotted
+            series_names = [s.name for s in visible_series]
+            if len(visible_series) == 1:
+                self.status_bar.set_status(f"Plotting 1 series: {series_names[0]}", "info")
+            else:
+                self.status_bar.set_status(f"Plotting {len(visible_series)} series: {', '.join(series_names[:3])}{'...' if len(visible_series) > 3 else ''}", "info")
+
             self.status_bar.set_status("Generating plot...", "info")
             self.status_bar.show_progress()
 
@@ -1068,35 +2141,96 @@ class ExcelDataPlotter(ctk.CTk):
             if self.toolbar:
                 self.toolbar.destroy()
 
-            if ctk.get_appearance_mode() == "Dark":
+            # Set theme-appropriate matplotlib style and colors
+            is_dark_theme = ctk.get_appearance_mode() == "Dark"
+            if is_dark_theme:
                 plt.style.use('dark_background')
+                fig_color = '#2b2b2b'  # Dark background
             else:
                 plt.style.use('seaborn-v0_8-whitegrid')
+                fig_color = 'white'  # Light background
 
             self.figure = Figure(figsize=(self.fig_width_var.get(), self.fig_height_var.get()),
-                                 facecolor='white', dpi=100)
+                                 facecolor=fig_color, dpi=100)
             ax = self.figure.add_subplot(111)
+            
+            # Set axes background to match theme
+            if is_dark_theme:
+                ax.set_facecolor('#2b2b2b')
+            else:
+                ax.set_facecolor('white')
+            
+            # Store axes reference for annotations
+            self.plot_axes = ax
+            
+            # Log plotting details
+            logger.info(f"Starting to plot {len(visible_series)} visible series")
 
             for i, series in enumerate(visible_series):
                 self.status_bar.show_progress((i + 1) / len(visible_series))
 
                 file_data = self.loaded_files.get(series.file_id)
                 if not file_data:
+                    logger.warning(f"File data not found for series {series.name} (file_id: {series.file_id})")
                     continue
 
                 try:
+                    logger.info(f"Plotting series {i+1}/{len(visible_series)}: '{series.name}' (color: {series.color})")
                     self.plot_single_series(ax, series, file_data)
                 except Exception as e:
                     logger.error(f"Error plotting series {series.name}: {e}")
                     continue
 
+            # Ensure axes are properly configured
+            logger.info("Configuring plot axes...")
+
+            # Ensure axes are properly configured
+            logger.info("Configuring plot axes...")
             self.configure_plot_axes(ax)
 
+            # Auto-scale to show all data
+            ax.relim()
+            ax.autoscale_view()
+            
+            # Draw annotations
             self.annotation_manager.draw_annotations(ax)
+            
+            # Force tight layout before canvas creation
+            self.figure.tight_layout()
 
             self.canvas = FigureCanvasTkAgg(self.figure, master=self.plot_area_frame)
+            logger.info("Canvas created, about to draw...")
             self.canvas.draw()
-            self.canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+            logger.info("Canvas drawn, about to grid...")
+            
+            # Debug widget hierarchy before gridding
+            logger.info(f"Plot area frame children before canvas grid: {list(self.plot_area_frame.children.keys())}")
+            
+            canvas_widget = self.canvas.get_tk_widget()
+            
+            # Configure the canvas widget properly
+            canvas_widget.configure(highlightthickness=0)
+            canvas_widget.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+            logger.info("Canvas gridded successfully")
+            
+            # Debug widget hierarchy after gridding
+            logger.info(f"Plot area frame children after canvas grid: {list(self.plot_area_frame.children.keys())}")
+            
+            # Force the plot area frame to update its layout
+            self.plot_area_frame.update_idletasks()
+            canvas_widget.update_idletasks()
+            
+            # Force canvas refresh
+            self.canvas.draw_idle()
+            
+            # Give the widget system time to process the layout
+            self.after_idle(lambda: self._finalize_canvas_display(canvas_widget))
+            
+            logger.info("Canvas and plot area updated")
+            
+            # Final widget state check
+            logger.info(f"Final canvas widget visibility: {canvas_widget.winfo_viewable()}")
+            logger.info(f"Final canvas widget size: {canvas_widget.winfo_width()}x{canvas_widget.winfo_height()}")
 
             toolbar_frame = ctk.CTkFrame(self.plot_area_frame, height=40)
             toolbar_frame.grid(row=1, column=0, sticky="ew", padx=5, pady=(0, 5))
@@ -1106,12 +2240,23 @@ class ExcelDataPlotter(ctk.CTk):
             self.toolbar.update()
 
             self.status_bar.hide_progress()
-            self.status_bar.set_status("Plot created successfully", "success")
+            
+            # Log completion and final check
+            handles, labels = ax.get_legend_handles_labels()
+            logger.info(f"Plot completed with {len(handles)} legend items")
+            
+            if len(handles) > 0:
+                self.status_bar.set_status(f"Plot created successfully with {len(visible_series)} series", "success")
+            else:
+                self.status_bar.set_status("Plot created but no data series visible", "warning")
 
         except Exception as e:
             self.status_bar.hide_progress()
             self.status_bar.set_status(f"Failed to create plot: {str(e)}", "error")
             logger.exception("Plot creation failed")
+        finally:
+            # Always clear the mutex flag
+            self._creating_plot = False
 
     def plot_single_series(self, ax, series, file_data):
         """Plot a single data series with enhanced problematic data handling"""
@@ -1165,6 +2310,11 @@ class ExcelDataPlotter(ctk.CTk):
         else:
             y_plot_smooth = y_plot
 
+        # Get proper label for the series
+        series_label = ""
+        if hasattr(series, 'show_in_legend') and series.show_in_legend:
+            series_label = getattr(series, 'legend_label', series.name) or series.name
+
         # Main plot
         if series.plot_type == 'line':
             ax.plot(x_plot, y_plot_smooth,
@@ -1174,14 +2324,19 @@ class ExcelDataPlotter(ctk.CTk):
                     marker=series.marker if series.marker else None,
                     markersize=series.marker_size,
                     alpha=series.alpha,
-                    label=series.legend_label if series.show_in_legend else "")
+                    label=series_label,
+                    zorder=getattr(series, 'z_order', 1))
         elif series.plot_type == 'scatter':
             ax.scatter(x_plot, y_plot_smooth,
                        color=series.color,
                        s=series.marker_size ** 2,
                        marker=series.marker if series.marker else 'o',
                        alpha=series.alpha,
-                       label=series.legend_label if series.show_in_legend else "")
+                       label=series_label,
+                       zorder=getattr(series, 'z_order', 1))
+        
+        # Log successful plotting
+        logger.info(f"Successfully plotted series '{series.name}' with {len(x_plot)} points (color: {series.color})")
 
         # Add analysis features
         if series.show_trendline:
@@ -1241,14 +2396,49 @@ class ExcelDataPlotter(ctk.CTk):
             logger.error(f"Failed to add trendline: {e}")
 
     def configure_plot_axes(self, ax):
-        """Configure plot axes and styling"""
-        ax.set_title(self.title_var.get(), fontsize=self.title_size_var.get(), fontweight='bold', pad=20)
-        ax.set_xlabel(self.xlabel_var.get(), fontsize=self.xlabel_size_var.get())
-        ax.set_ylabel(self.ylabel_var.get(), fontsize=self.ylabel_size_var.get())
+        """Configure plot axes and styling with theme-aware text colors"""
+        # Determine text color based on current theme and user overrides
+        is_dark_theme = ctk.get_appearance_mode() == "Dark"
+        
+        # Title color logic
+        if self.title_color_var.get() == "auto":
+            title_color = 'white' if is_dark_theme else 'black'
+        else:
+            title_color = self.title_color_var.get()
+        
+        # Axis text color logic  
+        if self.axis_text_color_var.get() == "auto":
+            text_color = 'white' if is_dark_theme else 'black'
+        else:
+            text_color = self.axis_text_color_var.get()
+        
+        # Configure title with proper color
+        ax.set_title(self.title_var.get(), 
+                    fontsize=self.title_size_var.get(), 
+                    fontweight='bold', 
+                    pad=20,
+                    color=title_color)
+        
+        # Configure axis labels with proper color
+        ax.set_xlabel(self.xlabel_var.get(), 
+                     fontsize=self.xlabel_size_var.get(),
+                     color=text_color)
+        ax.set_ylabel(self.ylabel_var.get(), 
+                     fontsize=self.ylabel_size_var.get(),
+                     color=text_color)
+        
+        # Configure tick labels with proper color
+        ax.tick_params(colors=text_color, which='both')
+        
+        # Set spine colors to be visible
+        for spine in ax.spines.values():
+            spine.set_color(text_color)
+            spine.set_alpha(0.8)
 
         if self.show_grid_var.get():
             ax.grid(True, linestyle=self.grid_style_var.get(),
-                    alpha=self.grid_alpha_var.get(), which='both')
+                    alpha=self.grid_alpha_var.get(), which='both',
+                    color=text_color)
             ax.set_axisbelow(True)
 
         if self.show_legend_var.get():
@@ -1256,8 +2446,19 @@ class ExcelDataPlotter(ctk.CTk):
             filtered = [(h, l) for h, l in zip(handles, labels) if l]
             if filtered:
                 handles, labels = zip(*filtered)
-                ax.legend(handles, labels, loc='best', frameon=True,
-                          fancybox=True, shadow=True, fontsize=10)
+                legend = ax.legend(handles, labels, loc='best', frameon=True,
+                                 fancybox=True, shadow=True, fontsize=10)
+                # Set legend colors based on theme
+                for text in legend.get_texts():
+                    text.set_color(text_color)
+                
+                # Set legend background and frame colors based on theme
+                legend_bg_color = '#2b2b2b' if is_dark_theme else 'white'
+                legend_edge_color = text_color
+                
+                legend.get_frame().set_facecolor(legend_bg_color)
+                legend.get_frame().set_edgecolor(legend_edge_color)
+                legend.get_frame().set_alpha(0.9)  # Semi-transparent background
 
         if self.log_scale_x_var.get():
             ax.set_xscale('log')
@@ -1419,6 +2620,27 @@ class ExcelDataPlotter(ctk.CTk):
         else:
             self.status_bar.set_status("No series available for analysis", "warning")
 
+    def show_enhanced_multi_analysis(self):
+        """Show enhanced multi-series analysis dialog"""
+        try:
+            if not self.all_series:
+                self.status_bar.set_status("No series available for analysis", "warning")
+                messagebox.showwarning("Warning", "Please load data and create series first")
+                return
+                
+            # Show the enhanced analysis dialog
+            result = show_enhanced_multi_series_analysis(self, self.all_series, self.loaded_files)
+            
+            if result:
+                self.status_bar.set_status("Enhanced multi-series analysis completed", "success")
+            else:
+                self.status_bar.set_status("Enhanced multi-series analysis opened", "info")
+                
+        except Exception as e:
+            logger.error(f"Error showing enhanced multi-analysis: {e}")
+            self.status_bar.set_status("Error opening enhanced analysis dialog", "error")
+            messagebox.showerror("Error", f"Failed to open enhanced analysis: {str(e)}")
+
     def show_annotation_panel(self):
         """Show annotation manager"""
         if not self.figure:
@@ -1426,11 +2648,7 @@ class ExcelDataPlotter(ctk.CTk):
             return
 
         ax = self.figure.axes[0] if self.figure and self.figure.axes else None
-        annotation_dialog = AnnotationDialog(
-            self,
-            self.annotation_manager,
-            ax
-        )
+        show_modern_annotation_dialog(self, self.annotation_manager, ax)
         self.status_bar.set_status("Annotation manager opened", "info")
 
     def show_advanced_data_selector(self):
@@ -1529,6 +2747,10 @@ class ExcelDataPlotter(ctk.CTk):
 
     def clear_plot_area(self):
         """Clear the plot area and show empty state"""
+        logger.info("CLEAR_PLOT_AREA CALLED - this may be the issue!")
+        import traceback
+        logger.info(f"Stack trace: {traceback.format_stack()}")
+        
         if hasattr(self, 'canvas') and self.canvas:
             self.canvas.get_tk_widget().destroy()
             self.canvas = None
@@ -1540,10 +2762,21 @@ class ExcelDataPlotter(ctk.CTk):
         self.empty_plot_frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
 
     def update_counts(self):
-        """Update file and series counts in status bar"""
+        """Update file and series counts in status bar and series panel"""
         file_count = len(self.loaded_files)
         series_count = len(self.all_series)
+        
+        # Update status bar
         self.status_bar.update_counts(files=file_count, series=series_count)
+        
+        # Update series count display if it exists
+        if hasattr(self, 'series_count_label'):
+            summary = self.get_series_summary()
+            count_text = f"({summary['total']} total, {summary['visible']} visible"
+            if summary['hidden'] > 0:
+                count_text += f", {summary['hidden']} hidden"
+            count_text += ")"
+            self.series_count_label.configure(text=count_text)
 
     def toggle_theme(self):
         """Toggle between dark and light themes"""
@@ -1599,6 +2832,61 @@ class ExcelDataPlotter(ctk.CTk):
             command=dialog.destroy,
             width=100
         ).pack(pady=10)
+
+    def create_smart_series(self, file_data=None):
+        """Create a new smart series with intelligent defaults"""
+        if not file_data and self.loaded_files:
+            # Use the first loaded file if none specified
+            file_data = list(self.loaded_files.values())[0]
+        
+        if not file_data:
+            messagebox.showwarning("No Data", "Please load a data file first.")
+            return
+        
+        # Create new series with smart dialog
+        new_series = show_enhanced_series_dialog(self, file_data, None)
+        if new_series:
+            # Add to series configurations
+            self.series_configs[new_series.id] = new_series
+            self.refresh_series_list()
+            self.update_plot()
+            
+            # Show success message
+            messagebox.showinfo("Success", f"Smart series '{new_series.name}' created successfully!")
+
+    def auto_detect_series(self, file_data):
+        """Automatically detect and create recommended series"""
+        if not file_data:
+            return
+        
+        numeric_cols = file_data.get_numeric_columns()
+        datetime_cols = file_data.datetime_columns
+        
+        recommendations = []
+        
+        # Recommend time series if datetime column exists
+        if datetime_cols and numeric_cols:
+            for i, num_col in enumerate(numeric_cols[:3]):  # Limit to first 3
+                series_name = f"Time Series: {num_col}"
+                recommendations.append({
+                    'name': series_name,
+                    'x_column': datetime_cols[0],
+                    'y_column': num_col,
+                    'type': 'time_series'
+                })
+        
+        # Recommend correlation plots for numeric columns
+        if len(numeric_cols) >= 2:
+            for i in range(min(2, len(numeric_cols)-1)):
+                series_name = f"Correlation: {numeric_cols[i+1]} vs {numeric_cols[i]}"
+                recommendations.append({
+                    'name': series_name,
+                    'x_column': numeric_cols[i],
+                    'y_column': numeric_cols[i+1],
+                    'type': 'correlation'
+                })
+        
+        return recommendations
 
     def on_closing(self):
         """Handle window closing event"""
@@ -1681,7 +2969,25 @@ class ExcelDataPlotter(ctk.CTk):
         self.create_plot()
 
     def show_statistical_analysis(self):
-        self.status_bar.set_status("Statistical analysis opened", "info")
+        """Show statistical analysis dialog"""
+        try:
+            if not self.all_series:
+                self.status_bar.set_status("No series available for analysis", "warning")
+                messagebox.showwarning("Warning", "Please load data and create series first")
+                return
+                
+            # Use the legacy statistical analyzer for now
+            from ui.dialogs import StatisticalAnalysisDialog
+            dialog = StatisticalAnalysisDialog(self, self.all_series, self.loaded_files, self.statistical_analyzer)
+            self.status_bar.set_status("Statistical analysis opened", "info")
+            
+        except ImportError:
+            # If the dialog doesn't exist, use the enhanced multi-series analysis instead
+            self.show_enhanced_multi_analysis()
+        except Exception as e:
+            logger.error(f"Error showing statistical analysis: {e}")
+            self.status_bar.set_status("Error opening statistical analysis", "error")
+            messagebox.showerror("Error", f"Failed to open statistical analysis: {str(e)}")
 
     def show_data_quality_report(self):
         self.status_bar.set_status("Data quality report generated", "info")
@@ -1736,32 +3042,216 @@ class ExcelDataPlotter(ctk.CTk):
             return
 
         selection = self.series_file_var.get()
-        file_id = selection.split('(')[-1].rstrip(')')
-        matching_file = None
-        for fid, fdata in self.loaded_files.items():
-            if fid.startswith(file_id):
-                matching_file = fdata
-                break
+        
+        # Get matching file
+        if hasattr(self, 'file_id_mapping') and selection in self.file_id_mapping:
+            file_id = self.file_id_mapping[selection]
+            matching_file = self.loaded_files.get(file_id)
+        else:
+            # Fallback to old method
+            file_id = selection.split('(')[-1].rstrip(')')
+            matching_file = None
+            for fid, fdata in self.loaded_files.items():
+                if fid.startswith(file_id):
+                    matching_file = fdata
+                    file_id = fid
+                    break
 
         if not matching_file:
             return
 
+        # Create series with current form data
+        series_name = self.series_name_var.get() or "New Series"
+        x_col = self.series_x_combo.get() or "Index"
+        y_col = self.series_y_combo.get()
+        
+        if not y_col:
+            self.status_bar.set_status("Please select a Y column first", "warning")
+            return
+
+        try:
+            start_idx = int(self.series_start_var.get()) if self.series_start_var.get() else 0
+            end_idx = int(self.series_end_var.get()) if self.series_end_var.get() else len(matching_file.df)
+        except ValueError:
+            start_idx = 0
+            end_idx = len(matching_file.df)
+
         series = SeriesConfig(
-            self.series_name_var.get() or "New Series",
-            file_id,
-            self.series_x_combo.get(),
-            self.series_y_combo.get(),
-            int(self.series_start_var.get()) if self.series_start_var.get() else 0,
-            int(self.series_end_var.get()) if self.series_end_var.get() else len(matching_file.df)
+            name=series_name,
+            file_id=file_id,
+            x_column=x_col,
+            y_column=y_col,
+            start_index=start_idx,
+            end_index=end_idx
         )
 
-        dialog = SeriesConfigDialog(self, series, matching_file)
-        self.wait_window(dialog.dialog)
-
-        if dialog.result == "apply":
-            self.all_series[series.id] = series
-            self.add_series_card(series)
+        dialog_result = show_enhanced_series_dialog(self, matching_file, series)
+        if dialog_result:
+            # Update the main form with the advanced configuration
+            updated_series = dialog_result
+            
+            # Update form fields to reflect changes
+            self.series_name_var.set(updated_series.name)
+            self.series_x_combo.set(updated_series.x_column)
+            self.series_y_combo.set(updated_series.y_column)
+            self.series_start_var.set(str(updated_series.start_index or 0))
+            self.series_end_var.set(str(updated_series.end_index or len(matching_file.df)))
+            
+            # Store the advanced configuration
+            self.all_series[updated_series.id] = updated_series
+            self.add_series_card(updated_series)
+            
             self.status_bar.set_status("Series created with advanced settings", "success")
+
+    def show_advanced_plot_config(self):
+        """Show advanced plot configuration dialog"""
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Advanced Plot Configuration")
+        dialog.geometry("600x700")
+        dialog.resizable(True, True)
+        
+        # Make it modal
+        dialog.transient(self)
+        dialog.grab_set()
+        
+        # Create notebook for tabs
+        notebook = ctk.CTkTabview(dialog)
+        notebook.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        # === PLOT TYPE TAB ===
+        plot_tab = notebook.add("Plot Type")
+        
+        plot_frame = ctk.CTkScrollableFrame(plot_tab)
+        plot_frame.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        ctk.CTkLabel(plot_frame, text="Plot Type Selection", font=("", 14, "bold")).pack(anchor="w", pady=5)
+        
+        self.plot_type_var = ctk.StringVar(value="line")
+        plot_types = [
+            ("Line Plot", "line", "Best for time series and continuous data"),
+            ("Scatter Plot", "scatter", "Best for correlation analysis"),
+            ("Bar Chart", "bar", "Best for categorical data"),
+            ("Step Plot", "step", "Best for step functions"),
+            ("Area Plot", "area", "Best for filled regions"),
+            ("Box Plot", "box", "Best for statistical distributions")
+        ]
+        
+        for name, value, description in plot_types:
+            frame = ctk.CTkFrame(plot_frame)
+            frame.pack(fill="x", pady=2)
+            
+            radio = ctk.CTkRadioButton(frame, text=name, variable=self.plot_type_var, value=value)
+            radio.pack(side="left", padx=10, pady=5)
+            
+            desc_label = ctk.CTkLabel(frame, text=description, text_color="gray")
+            desc_label.pack(side="left", padx=10, pady=5)
+        
+        # === APPEARANCE TAB ===
+        appearance_tab = notebook.add("Appearance")
+        
+        app_frame = ctk.CTkScrollableFrame(appearance_tab)
+        app_frame.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        # Title customization
+        title_section = ctk.CTkFrame(app_frame)
+        title_section.pack(fill="x", pady=5)
+        ctk.CTkLabel(title_section, text="Title & Labels", font=("", 12, "bold")).pack(anchor="w", padx=5, pady=5)
+        
+        # Title
+        title_frame = ctk.CTkFrame(title_section)
+        title_frame.pack(fill="x", padx=5, pady=2)
+        ctk.CTkLabel(title_frame, text="Plot Title:", width=100).pack(side="left", padx=5)
+        title_entry = ctk.CTkEntry(title_frame, textvariable=self.title_var)
+        title_entry.pack(side="left", fill="x", expand=True, padx=5)
+        
+        # Title color override
+        title_color_frame = ctk.CTkFrame(title_section)
+        title_color_frame.pack(fill="x", padx=5, pady=2)
+        ctk.CTkLabel(title_color_frame, text="Title Color:", width=100).pack(side="left", padx=5)
+        self.title_color_var = ctk.StringVar(value="auto")
+        title_color_combo = ctk.CTkComboBox(title_color_frame, 
+                                          values=["auto", "black", "white", "red", "blue", "green"],
+                                          variable=self.title_color_var)
+        title_color_combo.pack(side="left", padx=5)
+        
+        # Axis labels
+        xlabel_frame = ctk.CTkFrame(title_section)
+        xlabel_frame.pack(fill="x", padx=5, pady=2)
+        ctk.CTkLabel(xlabel_frame, text="X Label:", width=100).pack(side="left", padx=5)
+        xlabel_entry = ctk.CTkEntry(xlabel_frame, textvariable=self.xlabel_var)
+        xlabel_entry.pack(side="left", fill="x", expand=True, padx=5)
+        
+        ylabel_frame = ctk.CTkFrame(title_section)
+        ylabel_frame.pack(fill="x", padx=5, pady=2)
+        ctk.CTkLabel(ylabel_frame, text="Y Label:", width=100).pack(side="left", padx=5)
+        ylabel_entry = ctk.CTkEntry(ylabel_frame, textvariable=self.ylabel_var)
+        ylabel_entry.pack(side="left", fill="x", expand=True, padx=5)
+        
+        # Text color overrides
+        text_section = ctk.CTkFrame(app_frame)
+        text_section.pack(fill="x", pady=5)
+        ctk.CTkLabel(text_section, text="Text Color Overrides", font=("", 12, "bold")).pack(anchor="w", padx=5, pady=5)
+        
+        self.axis_text_color_var = ctk.StringVar(value="auto")
+        axis_color_frame = ctk.CTkFrame(text_section)
+        axis_color_frame.pack(fill="x", padx=5, pady=2)
+        ctk.CTkLabel(axis_color_frame, text="Axis Text:", width=100).pack(side="left", padx=5)
+        axis_color_combo = ctk.CTkComboBox(axis_color_frame,
+                                         values=["auto", "black", "white", "red", "blue", "green"],
+                                         variable=self.axis_text_color_var)
+        axis_color_combo.pack(side="left", padx=5)
+        
+        # === ADVANCED TAB ===
+        advanced_tab = notebook.add("Advanced")
+        
+        adv_frame = ctk.CTkScrollableFrame(advanced_tab)
+        adv_frame.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        # Grid options
+        grid_section = ctk.CTkFrame(adv_frame)
+        grid_section.pack(fill="x", pady=5)
+        ctk.CTkLabel(grid_section, text="Grid & Legend", font=("", 12, "bold")).pack(anchor="w", padx=5, pady=5)
+        
+        grid_check = ctk.CTkCheckBox(grid_section, text="Show Grid", variable=self.show_grid_var)
+        grid_check.pack(anchor="w", padx=5, pady=2)
+        
+        legend_check = ctk.CTkCheckBox(grid_section, text="Show Legend", variable=self.show_legend_var)
+        legend_check.pack(anchor="w", padx=5, pady=2)
+        
+        # Scale options
+        scale_section = ctk.CTkFrame(adv_frame)
+        scale_section.pack(fill="x", pady=5)
+        ctk.CTkLabel(scale_section, text="Scale Options", font=("", 12, "bold")).pack(anchor="w", padx=5, pady=5)
+        
+        log_x_check = ctk.CTkCheckBox(scale_section, text="Logarithmic X-axis", variable=self.log_scale_x_var)
+        log_x_check.pack(anchor="w", padx=5, pady=2)
+        
+        log_y_check = ctk.CTkCheckBox(scale_section, text="Logarithmic Y-axis", variable=self.log_scale_y_var)
+        log_y_check.pack(anchor="w", padx=5, pady=2)
+        
+        # === BUTTONS ===
+        button_frame = ctk.CTkFrame(dialog)
+        button_frame.pack(fill="x", padx=10, pady=5)
+        
+        def apply_and_close():
+            # Apply the configuration
+            self.create_plot()
+            dialog.destroy()
+        
+        def close_dialog():
+            dialog.destroy()
+        
+        ctk.CTkButton(button_frame, text="Apply & Close", 
+                     command=apply_and_close,
+                     fg_color=ColorPalette.SUCCESS).pack(side="right", padx=5)
+        ctk.CTkButton(button_frame, text="Cancel", 
+                     command=close_dialog).pack(side="right", padx=5)
+        
+        # Center the dialog
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
+        y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2)
+        dialog.geometry(f"+{x}+{y}")
 
 
 if __name__ == "__main__":

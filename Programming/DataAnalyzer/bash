@@ -1,0 +1,72 @@
+#!/bin/bash
+
+# VS Code Shell Integration Setup Script
+
+# Check if VS Code is installed
+if ! command -v code &> /dev/null; then
+    echo "VS Code is not installed or not in PATH. Please install it first."
+    exit 1
+fi
+
+# Determine the current shell
+current_shell=$(basename "$SHELL")
+
+# Configure shell integration based on the detected shell
+case $current_shell in
+    bash)
+        echo "Configuring for Bash..."
+        # Add to bashrc if not already present
+        if ! grep -q "VSCODE_SHELL_INTEGRATION" ~/.bashrc; then
+            echo -e "\n# VS Code Shell Integration" >> ~/.bashrc
+            echo '[[ "$TERM_PROGRAM" == "vscode" ]] && . "$(code --locate-shell-integration-path bash)"' >> ~/.bashrc
+        fi
+        ;;
+    zsh)
+        echo "Configuring for Zsh..."
+        # Add to zshrc if not already present
+        if ! grep -q "VSCODE_SHELL_INTEGRATION" ~/.zshrc; then
+            echo -e "\n# VS Code Shell Integration" >> ~/.zshrc
+            echo '[[ "$TERM_PROGRAM" == "vscode" ]] && . "$(code --locate-shell-integration-path zsh)"' >> ~/.zshrc
+        fi
+        ;;
+    fish)
+        echo "Configuring for Fish..."
+        # Create fish config directory if it doesn't exist
+        mkdir -p ~/.config/fish/conf.d
+        # Add shell integration if not already present
+        if [ ! -f ~/.config/fish/conf.d/vscode_shell_integration.fish ]; then
+            echo '# VS Code Shell Integration' > ~/.config/fish/conf.d/vscode_shell_integration.fish
+            echo 'string match -q "$TERM_PROGRAM" "vscode" && . (code --locate-shell-integration-path fish)' >> ~/.config/fish/conf.d/vscode_shell_integration.fish
+        fi
+        ;;
+    *)
+        echo "Unsupported shell: $current_shell"
+        echo "Please manually configure shell integration for your shell."
+        exit 1
+        ;;
+esac
+
+echo "Shell integration configured for $current_shell."
+echo "Please restart your VS Code terminal or open a new terminal for changes to take effect."
+
+# Enable relevant VS Code settings
+echo "Configuring VS Code settings..."
+code --enable-features ShellIntegration
+code --set-terminal-integration enabled
+
+cat << EOF
+
+Additional manual steps you might want to take:
+1. In VS Code, open settings (Ctrl+, or Cmd+, on Mac)
+2. Search for "shell integration"
+3. Ensure the following settings are enabled:
+   - Terminal > Integrated: Shell Integration
+   - Terminal > Integrated: Enable Shell Integration
+4. Restart VS Code for all changes to take effect
+
+Shell integration will provide:
+- Better command detection
+- Improved terminal features
+- Command decorations
+- Enhanced navigation
+EOF

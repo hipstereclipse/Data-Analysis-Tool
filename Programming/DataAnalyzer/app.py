@@ -32,12 +32,12 @@ from config.constants import (
 from ui.series_dialog import show_series_dialog
 from ui.annotation_dialog import show_annotation_dialog
 from ui.multi_series_analysis import show_multi_series_analysis
-from core.ui_factory import UIFactory
+from core.ui_factory import UIFactory, DualRangeSlider
 from core.data_utils import DataProcessor, DataValidator
 
 # Import enhanced components
 from ui.theme_manager import theme_manager
-from ui.series_dialog import show_series_dialog, SeriesDialog, DualHandleRangeSlider
+from ui.series_dialog import show_series_dialog, SeriesDialog
 from ui.multi_series_analysis import show_multi_series_analysis
 from core.plot_manager import PlotManager
 from ui.theme_manager import EnhancedThemeManager
@@ -54,8 +54,8 @@ from ui.dialogs import (
     SeriesConfigDialog, VacuumAnalysisDialog, AnnotationDialog,
     DataSelectorDialog, PlotConfigDialog, ExportDialog
 )
-from ui.series_dialog import show_smart_series_dialog
-from ui.annotation_dialog import show_modern_annotation_dialog
+from ui.series_dialog import show_series_dialog
+from ui.annotation_dialog import show_annotation_dialog
 
 # Import core managers
 from core.file_manager import FileManager
@@ -387,9 +387,6 @@ class ExcelDataPlotter(ctk.CTk):
         self.preview_panel.grid(row=0, column=2, sticky="nsew", padx=(3, 0))
         self.preview_panel.grid_propagate(False)
 
-        # Create preview panel content
-        self.create_preview_panel()
-
     def create_files_panel(self, parent):
         """Create the files management panel"""
         # Header
@@ -516,7 +513,7 @@ class ExcelDataPlotter(ctk.CTk):
         self.end_var = tk.IntVar(value=100)
         
         # Dual-handle range slider
-        self.dual_range_slider = DualHandleRangeSlider(
+        self.dual_range_slider = DualRangeSlider(
             slider_frame,
             from_=0,
             to=100,
@@ -2665,7 +2662,7 @@ class ExcelDataPlotter(ctk.CTk):
             return
 
         ax = self.figure.axes[0] if self.figure and self.figure.axes else None
-        show_modern_annotation_dialog(self, self.annotation_manager, ax)
+        show_annotation_dialog(self, self.annotation_manager, ax)
         self.status_bar.set_status("Annotation manager opened", "info")
 
     def show_advanced_data_selector(self):

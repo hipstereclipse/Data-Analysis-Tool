@@ -410,7 +410,6 @@ class PlotConfiguration:
 
 
 @dataclass
-@dataclass
 class AnnotationConfig:
     """Annotation configuration"""
     annotation_id: str = field(default_factory=lambda: str(uuid.uuid4()))
@@ -482,6 +481,44 @@ class AnnotationConfig:
         if 'type' in kwargs:
             kwargs['annotation_type'] = kwargs.pop('type')
         
+        # Handle annotation dialog parameter mappings
+        if 'x_position' in kwargs:
+            kwargs['x'] = kwargs.pop('x_position')
+        if 'y_position' in kwargs:
+            kwargs['y'] = kwargs.pop('y_position')
+        if 'show_arrow' in kwargs:
+            kwargs['arrow_style'] = '-> ' if kwargs.pop('show_arrow') else ''
+        if 'background' in kwargs:
+            bg_enabled = kwargs.pop('background')
+            if bg_enabled and 'color' in kwargs:
+                kwargs['background_color'] = kwargs['color']
+        if 'border' in kwargs:
+            border_enabled = kwargs.pop('border')
+            if border_enabled and 'color' in kwargs:
+                kwargs['border_color'] = kwargs['color']
+        if 'arrow_orientation' in kwargs:
+            orientation = kwargs.pop('arrow_orientation')
+            # Map orientation to arrow style
+            orientation_map = {
+                'up': '^',
+                'down': 'v', 
+                'left': '<',
+                'right': '>',
+                'northeast': '^>',
+                'northwest': '<^',
+                'southeast': 'v>',
+                'southwest': '<v'
+            }
+            kwargs['arrow_style'] = orientation_map.get(orientation, '->')
+        if 'line_thickness' in kwargs:
+            kwargs['arrow_width'] = kwargs.pop('line_thickness')
+        if 'arrow_size' in kwargs:
+            kwargs['arrow_width'] = kwargs.pop('arrow_size')  # Use arrow_width for size
+        if 'background_alpha' in kwargs:
+            kwargs['alpha'] = kwargs.pop('background_alpha')
+        if 'border_thickness' in kwargs:
+            kwargs['border_width'] = kwargs.pop('border_thickness')
+        
         # Set defaults first
         self.annotation_id = kwargs.get('annotation_id', str(uuid.uuid4()))
         self.annotation_type = kwargs.get('annotation_type', 'text')
@@ -548,6 +585,117 @@ class AnnotationConfig:
     @property
     def type(self) -> str:
         return self.annotation_type
+    
+    # Annotation dialog compatibility properties
+    @property
+    def x_position(self) -> float:
+        return self.x
+    
+    @x_position.setter
+    def x_position(self, value: float):
+        self.x = value
+    
+    @property
+    def y_position(self) -> float:
+        return self.y
+    
+    @y_position.setter
+    def y_position(self, value: float):
+        self.y = value
+    
+    @property
+    def show_arrow(self) -> bool:
+        return bool(self.arrow_style and self.arrow_style != '')
+    
+    @show_arrow.setter
+    def show_arrow(self, value: bool):
+        if value:
+            self.arrow_style = '->' if not self.arrow_style else self.arrow_style
+        else:
+            self.arrow_style = ''
+    
+    @property
+    def background(self) -> bool:
+        return bool(self.background_color)
+    
+    @background.setter
+    def background(self, value: bool):
+        if value and not self.background_color:
+            self.background_color = self.color
+        elif not value:
+            self.background_color = None
+    
+    @property
+    def border(self) -> bool:
+        return bool(self.border_color)
+    
+    @border.setter
+    def border(self, value: bool):
+        if value and not self.border_color:
+            self.border_color = self.color
+        elif not value:
+            self.border_color = None
+    
+    @property
+    def arrow_orientation(self) -> str:
+        """Get arrow orientation from arrow_style"""
+        style_map = {
+            '^': 'up',
+            'v': 'down',
+            '<': 'left',
+            '>': 'right',
+            '^>': 'northeast',
+            '<^': 'northwest',
+            'v>': 'southeast',
+            '<v': 'southwest'
+        }
+        return style_map.get(self.arrow_style, 'up')
+    
+    @arrow_orientation.setter
+    def arrow_orientation(self, value: str):
+        orientation_map = {
+            'up': '^',
+            'down': 'v', 
+            'left': '<',
+            'right': '>',
+            'northeast': '^>',
+            'northwest': '<^',
+            'southeast': 'v>',
+            'southwest': '<v'
+        }
+        self.arrow_style = orientation_map.get(value, '->')
+    
+    @property
+    def line_thickness(self) -> float:
+        return self.arrow_width
+    
+    @line_thickness.setter
+    def line_thickness(self, value: float):
+        self.arrow_width = value
+    
+    @property
+    def arrow_size(self) -> float:
+        return self.arrow_width
+    
+    @arrow_size.setter
+    def arrow_size(self, value: float):
+        self.arrow_width = value
+    
+    @property
+    def background_alpha(self) -> float:
+        return self.alpha
+    
+    @background_alpha.setter
+    def background_alpha(self, value: float):
+        self.alpha = value
+    
+    @property
+    def border_thickness(self) -> float:
+        return self.border_width
+    
+    @border_thickness.setter
+    def border_thickness(self, value: float):
+        self.border_width = value
 
     def to_dict(self) -> Dict[str, Any]:
         return self.__dict__.copy()

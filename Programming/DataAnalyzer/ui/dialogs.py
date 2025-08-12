@@ -23,7 +23,6 @@ from config.constants import UIConfig, MissingDataMethods, TrendTypes
 from ui.components import CollapsibleFrame, ToolTip
 from utils.helpers import detect_datetime_column
 from scipy.signal import find_peaks, savgol_filter
-from ui.themed_dialog_base import ThemedDialogBase
 
 
 class SeriesConfigDialog:
@@ -1515,7 +1514,7 @@ class SeriesDialog:
         self.dialog.geometry(f"+{x}+{y}")
 
 
-class AnalysisDialog:
+class StatisticalAnalysisDialog:
     """Dialog for data analysis - Enhanced with Legacy Features"""
 
     def __init__(
@@ -1534,14 +1533,18 @@ class AnalysisDialog:
         self.vacuum_results = {}
 
         # Create dialog
-        self.dialog = tk.Toplevel(parent)
+        self.dialog = ctk.CTkToplevel(parent)
         self.dialog.title("Data Analysis Tools")
         self.dialog.geometry("1000x700")
         self.dialog.transient(parent)
         self.dialog.grab_set()
 
+        # Initialize theme manager
+        from ui.theme_manager import theme_manager
+        self.theme_manager = theme_manager
+
         # Create notebook for different analysis types
-        self.notebook = ttk.Notebook(self.dialog)
+        self.notebook = ctk.CTkTabview(self.dialog)
         self.notebook.pack(fill="both", expand=True, padx=10, pady=10)
 
         # Add analysis tabs
@@ -1569,8 +1572,7 @@ class AnalysisDialog:
 
     def _create_statistical_tab(self):
         """Create statistical analysis tab"""
-        tab = ttk.Frame(self.notebook)
-        self.notebook.add(tab, text="📊 Statistical Analysis")
+        tab = self.notebook.add("📊 Statistical Analysis")
 
         # Series selection
         select_frame = ctk.CTkFrame(tab)
@@ -1595,16 +1597,15 @@ class AnalysisDialog:
         ).pack(side="left", padx=10)
 
         # Results display
-        self.stat_results = tk.Text(tab, wrap="word", height=20)
+        self.stat_results = ctk.CTkTextbox(tab, wrap="word", height=400)
         self.stat_results.pack(fill="both", expand=True, padx=10, pady=10)
 
     def _create_vacuum_tab(self):
         """Create vacuum analysis tab with legacy features"""
-        tab = ttk.Frame(self.notebook)
-        self.notebook.add(tab, text="🎯 Vacuum Analysis")
+        tab = self.notebook.add("🎯 Vacuum Analysis")
 
         # Create notebook for vacuum sub-tabs
-        vacuum_notebook = ttk.Notebook(tab)
+        vacuum_notebook = ctk.CTkTabview(tab)
         vacuum_notebook.pack(fill="both", expand=True, padx=10, pady=10)
 
         # Add vacuum sub-tabs
@@ -1615,8 +1616,7 @@ class AnalysisDialog:
 
     def _create_base_pressure_tab(self, notebook):
         """Create base pressure analysis tab"""
-        tab = ttk.Frame(notebook)
-        notebook.add(tab, text="Base Pressure")
+        tab = notebook.add("Base Pressure")
 
         # Series selection
         frame = ctk.CTkFrame(tab)
@@ -1667,8 +1667,7 @@ class AnalysisDialog:
 
     def _create_spike_detection_tab(self, notebook):
         """Create spike detection tab"""
-        tab = ttk.Frame(notebook)
-        notebook.add(tab, text="Spike Detection")
+        tab = notebook.add("Spike Detection")
 
         # Series selection
         frame = ctk.CTkFrame(tab)
@@ -1725,8 +1724,7 @@ class AnalysisDialog:
 
     def _create_leak_detection_tab(self, notebook):
         """Create leak detection tab"""
-        tab = ttk.Frame(notebook)
-        notebook.add(tab, text="Leak Detection")
+        tab = notebook.add("Leak Detection")
 
         # Series selection
         frame = ctk.CTkFrame(tab)
@@ -1762,8 +1760,7 @@ class AnalysisDialog:
 
     def _create_pumpdown_tab(self, notebook):
         """Create pump-down analysis tab"""
-        tab = ttk.Frame(notebook)
-        notebook.add(tab, text="Pump-down")
+        tab = notebook.add("Pump-down")
 
         # Series selection
         frame = ctk.CTkFrame(tab)
@@ -1799,8 +1796,7 @@ class AnalysisDialog:
 
     def _create_comparison_tab(self):
         """Create series comparison tab"""
-        tab = ttk.Frame(self.notebook)
-        self.notebook.add(tab, text="📈 Comparison")
+        tab = self.notebook.add("📈 Comparison")
 
         # Implementation for comparing multiple series
 
@@ -1852,11 +1848,14 @@ class AnalysisDialog:
         results += f"  Shapiro p-value: {normality['shapiro_p']:.6f}\n\n"
 
         results += "Outlier Detection:\n"
-        results += f"  Outliers Found: {outliers['count']}\n"
-        results += f"  Percentage: {outliers['percentage']:.2f}%\n"
+        outlier_count = len(outliers) if isinstance(outliers, list) else 0
+        total_count = len(y_data)
+        outlier_percentage = (outlier_count / total_count * 100) if total_count > 0 else 0
+        results += f"  Outliers Found: {outlier_count}\n"
+        results += f"  Percentage: {outlier_percentage:.2f}%\n"
 
-        self.stat_results.delete(1.0, tk.END)
-        self.stat_results.insert(1.0, results)
+        self.stat_results.delete("1.0", "end")
+        self.stat_results.insert("1.0", results)
 
     def _run_base_pressure_analysis(self):
         """Run base pressure analysis"""
@@ -1900,8 +1899,16 @@ class AnalysisDialog:
         # Display results
         text = f"BASE PRESSURE ANALYSIS: {series_name}\n"
         text += "=" * 50 + "\n\n"
-        text += f"Base Pressure: {result['base_pressure']:.2e} mbar\n"
-        text += f"Stability: {result['stability']:.2e} mbar\n"
+        
+        if isinstance(result, tuple):
+            base_pressure = result[0]
+            stability = result[1] if len(result) > 1 else 0.0
+        else:
+            base_pressure = result
+            stability = 0.0
+            
+        text += f"Base Pressure: {base_pressure:.2e} mbar\n"
+        text += f"Stability: {stability:.2e} mbar\n"
         text += f"Analysis Window: {window_size} minutes\n"
 
         self.base_text.delete(1.0, tk.END)
@@ -2645,17 +2652,17 @@ class DataPreviewDialog:
 
         # Data tab
         data_tab = ttk.Frame(notebook)
-        notebook.add(data_tab, text="📊 Data")
+        self.notebook.add("📊 Data")
         self._create_data_tab(data_tab)
 
         # Info tab
         info_tab = ttk.Frame(notebook)
-        notebook.add(info_tab, text="ℹ️ Info")
+        self.notebook.add("ℹ️ Info")
         self._create_info_tab(info_tab)
 
         # Statistics tab
         stats_tab = ttk.Frame(notebook)
-        notebook.add(stats_tab, text="📈 Statistics")
+        self.notebook.add("📈 Statistics")
         self._create_stats_tab(stats_tab)
 
         # Close button
@@ -3516,7 +3523,7 @@ class ExportDialog:
         self.result = 'cancel'
         self.dialog.destroy()
 
-class VacuumAnalysisDialog(ThemedDialogBase):
+class VacuumAnalysisDialog:
     """Dialog for vacuum-specific data analysis tools with theme support"""
 
     def _safe_format_float(self, value):
@@ -3537,6 +3544,7 @@ class VacuumAnalysisDialog(ThemedDialogBase):
             loaded_files: Dict[str, FileData],
             vacuum_analyzer: VacuumAnalyzer
     ):
+        self.parent = parent
         self.series_configs = series_configs
         self.loaded_files = loaded_files
         self.vacuum_analyzer = vacuum_analyzer
@@ -3547,8 +3555,23 @@ class VacuumAnalysisDialog(ThemedDialogBase):
         self.leak_results = []
         self.pumpdown_results = []
 
-        # Initialize using themed base class
-        super().__init__(parent, "🔬 Vacuum Data Analysis Tools", (1000, 750))
+        # Create dialog window
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("🔬 Vacuum Data Analysis Tools")
+        self.dialog.geometry("1000x750")
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+        
+        # Initialize theme manager first
+        from ui.theme_manager import theme_manager
+        self.theme_manager = theme_manager
+        
+        # Configure theme consistency for vacuum tools dialog
+        self.dialog.configure(bg=theme_manager.get_color("window_bg"))
+        
+        # Configure grid weights
+        self.dialog.grid_columnconfigure(0, weight=1)
+        self.dialog.grid_rowconfigure(0, weight=1)
 
         # Create UI
         self.create_widgets()
@@ -3556,7 +3579,7 @@ class VacuumAnalysisDialog(ThemedDialogBase):
     def create_widgets(self):
         """Create dialog widgets with themed components"""
         # Create main container frame
-        main_frame = self.theme_manager.create_styled_frame(self)
+        main_frame = self.theme_manager.create_styled_frame(self.dialog)
         main_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
         main_frame.grid_columnconfigure(0, weight=1)
         main_frame.grid_rowconfigure(0, weight=1)
@@ -3586,6 +3609,33 @@ class VacuumAnalysisDialog(ThemedDialogBase):
             text="Close",
             command=self.destroy
         ).pack(side="right", padx=5)
+
+    def destroy(self):
+        """Destroy the dialog window"""
+        if hasattr(self, 'dialog') and self.dialog:
+            self.dialog.destroy()
+
+    def protocol(self, protocol_name, func):
+        """Set window manager protocol callback"""
+        if hasattr(self, 'dialog') and self.dialog:
+            self.dialog.protocol(protocol_name, func)
+
+    def on_base_series_selected(self, event=None):
+        """Handle base pressure series selection"""
+        # Placeholder method - implement as needed
+        pass
+
+    def calculate_base_pressure(self):
+        """Calculate base pressure for selected series"""
+        # Placeholder method - implement as needed
+        from tkinter import messagebox
+        messagebox.showinfo("Info", "Base pressure calculation not yet implemented")
+
+    def add_base_pressure_line(self):
+        """Add base pressure line to main plot"""
+        # Placeholder method - implement as needed
+        from tkinter import messagebox
+        messagebox.showinfo("Info", "Add base pressure line not yet implemented")
 
     def create_base_pressure_tab(self, notebook):
         """Create base pressure analysis tab with themed components"""

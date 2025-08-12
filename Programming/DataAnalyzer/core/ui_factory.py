@@ -184,8 +184,9 @@ class DualRangeSlider(ctk.CTkFrame):
         self.end_label = ctk.CTkLabel(header_frame, text=f"End: {self.end_var.get()}")
         self.end_label.grid(row=0, column=2, sticky="e", padx=5)
         
-        # Create canvas for slider
-        self.canvas = ctk.CTkCanvas(self, height=40, highlightthickness=0)
+        # Create canvas for slider with theme colors - use the global theme_manager import
+        canvas_bg = theme_manager.get_color("bg_secondary")
+        self.canvas = ctk.CTkCanvas(self, height=40, highlightthickness=0, bg=canvas_bg)
         self.canvas.grid(row=1, column=0, sticky="ew", padx=10, pady=5)
         
         # Bind events
@@ -207,17 +208,21 @@ class DualRangeSlider(ctk.CTkFrame):
         
     def _draw_slider(self):
         """Draw the slider track and handles"""
-        if not self.canvas.winfo_exists():
-            return
+        try:
+            if not hasattr(self, 'canvas') or not self.canvas.winfo_exists():
+                return
+                
+            self.canvas.delete("all")
             
-        self.canvas.delete("all")
-        
-        # Get canvas dimensions
-        width = self.canvas.winfo_width()
-        height = self.canvas.winfo_height()
-        
-        if width <= 1:  # Canvas not ready yet
-            self.after(10, self._draw_slider)
+            # Get canvas dimensions
+            width = self.canvas.winfo_width()
+            height = self.canvas.winfo_height()
+            
+            if width <= 1:  # Canvas not ready yet
+                self.after(10, self._draw_slider)
+                return
+        except Exception:
+            # Canvas might be destroyed, skip drawing
             return
             
         # Calculate positions
@@ -234,30 +239,33 @@ class DualRangeSlider(ctk.CTkFrame):
         start_x = track_start + start_ratio * track_width
         end_x = track_start + end_ratio * track_width
         
+        # Get theme-appropriate colors - use the global theme_manager import
+        track_color = theme_manager.get_color("bg_tertiary")
+        range_color = theme_manager.get_color("accent")
+        handle_color = theme_manager.get_color("fg_primary")
+        
         # Draw track
-        track_color = "#565B5E" if ctk.get_appearance_mode() == "Dark" else "#D0D0D0"
         self.canvas.create_line(track_start, track_y, track_end, track_y, 
                                width=4, fill=track_color, capstyle="round")
         
         # Draw selected range
-        range_color = "#1F6AA5" if ctk.get_appearance_mode() == "Dark" else "#3B82F6"
         self.canvas.create_line(start_x, track_y, end_x, track_y, 
                                width=6, fill=range_color, capstyle="round")
         
         # Draw handles
-        handle_color = "#FFFFFF" if ctk.get_appearance_mode() == "Dark" else "#000000"
-        handle_outline = "#000000" if ctk.get_appearance_mode() == "Dark" else "#FFFFFF"
+        handle_fill = theme_manager.get_color("accent")
+        handle_outline = theme_manager.get_color("fg_primary")
         
         # Start handle
         self.start_handle = self.canvas.create_oval(
             start_x - 8, track_y - 8, start_x + 8, track_y + 8,
-            fill=handle_color, outline=handle_outline, width=2, tags="start_handle"
+            fill=handle_fill, outline=handle_outline, width=2, tags="start_handle"
         )
         
         # End handle  
         self.end_handle = self.canvas.create_oval(
             end_x - 8, track_y - 8, end_x + 8, track_y + 8,
-            fill=handle_color, outline=handle_outline, width=2, tags="end_handle"
+            fill=handle_fill, outline=handle_outline, width=2, tags="end_handle"
         )
         
         # Update labels
@@ -337,4 +345,39 @@ class DualRangeSlider(ctk.CTkFrame):
         
     def _on_var_change(self, *args):
         """Handle variable changes from external sources"""
+        try:
+            self._draw_slider()
+        except Exception:
+            # Widget might be destroyed, ignore
+            pass
+        
+    def configure_range(self, from_=None, to=None):
+        """Configure the range of the slider"""
+        if from_ is not None:
+            self.from_ = from_
+        if to is not None:
+            self.to = to
+        
+        # Ensure current values are within new range
+        current_start = self.start_var.get()
+        current_end = self.end_var.get()
+        
+        self.start_var.set(max(self.from_, min(self.to, current_start)))
+        self.end_var.set(max(self.from_, min(self.to, current_end)))
+        
+        # Redraw the slider
         self._draw_slider()
+    
+    def refresh_theme(self):
+        """Refresh the slider appearance for theme changes"""
+        try:
+            # Update canvas background - use the global theme_manager import
+            canvas_bg = theme_manager.get_color("bg_secondary")
+            
+            if self.canvas.winfo_exists():
+                self.canvas.configure(bg=canvas_bg)
+                # Redraw with new colors
+                self._draw_slider()
+        except Exception as e:
+            # Ignore errors if widget no longer exists
+            pass

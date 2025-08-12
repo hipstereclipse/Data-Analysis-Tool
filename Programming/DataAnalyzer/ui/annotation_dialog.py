@@ -47,6 +47,9 @@ class AnnotationDialog:
         
         # Refresh annotation list
         self._refresh_annotation_list()
+        
+        # Bind coordinates to plot for slider ranges
+        self._bind_coordinates_to_plot()
     
     def _init_variables(self):
         """Initialize dialog variables"""
@@ -60,6 +63,13 @@ class AnnotationDialog:
         self.arrow_var = tk.BooleanVar(value=False)
         self.background_var = tk.BooleanVar(value=False)
         self.border_var = tk.BooleanVar(value=False)
+        
+        # Enhanced annotation properties
+        self.arrow_orientation_var = tk.StringVar(value="up")
+        self.line_thickness_var = tk.DoubleVar(value=1.0)
+        self.arrow_size_var = tk.DoubleVar(value=10.0)
+        self.background_alpha_var = tk.DoubleVar(value=0.8)
+        self.border_thickness_var = tk.DoubleVar(value=1.0)
         
         # Annotation templates
         self.templates = self._create_templates()
@@ -141,25 +151,41 @@ class AnnotationDialog:
         content = ctk.CTkFrame(section)
         content.pack(fill="x", padx=10, pady=5)
         
-        # Position selection
+        # Position selection with slider-based positioning
         pos_frame = ctk.CTkFrame(content)
         pos_frame.pack(fill="x", pady=5)
-        pos_frame.grid_columnconfigure(1, weight=1)
-        pos_frame.grid_columnconfigure(3, weight=1)
         
-        ctk.CTkLabel(pos_frame, text="X:").grid(row=0, column=0, sticky="w", padx=5)
-        ctk.CTkEntry(pos_frame, textvariable=self.x_pos_var, width=80).grid(row=0, column=1, sticky="ew", padx=5)
+        # X Position Slider
+        x_pos_frame = ctk.CTkFrame(pos_frame)
+        x_pos_frame.pack(fill="x", pady=2)
+        ctk.CTkLabel(x_pos_frame, text="X Position:", width=80).pack(side="left")
+        self.x_pos_slider = ctk.CTkSlider(
+            x_pos_frame,
+            from_=0,
+            to=100,
+            variable=self.x_pos_var,
+            command=self._update_position_from_slider,
+            width=150
+        )
+        self.x_pos_slider.pack(side="left", padx=5, fill="x", expand=True)
+        self.x_pos_label = ctk.CTkLabel(x_pos_frame, text="0.0", width=50)
+        self.x_pos_label.pack(side="right", padx=5)
         
-        ctk.CTkLabel(pos_frame, text="Y:").grid(row=0, column=2, sticky="w", padx=5)
-        ctk.CTkEntry(pos_frame, textvariable=self.y_pos_var, width=80).grid(row=0, column=3, sticky="ew", padx=5)
-        
-        # Click to place button
-        ctk.CTkButton(
-            content,
-            text="📍 Click to Place",
-            command=self._start_click_placement,
-            width=200
-        ).pack(pady=5)
+        # Y Position Slider
+        y_pos_frame = ctk.CTkFrame(pos_frame)
+        y_pos_frame.pack(fill="x", pady=2)
+        ctk.CTkLabel(y_pos_frame, text="Y Position:", width=80).pack(side="left")
+        self.y_pos_slider = ctk.CTkSlider(
+            y_pos_frame,
+            from_=0,
+            to=100,
+            variable=self.y_pos_var,
+            command=self._update_position_from_slider,
+            width=150
+        )
+        self.y_pos_slider.pack(side="left", padx=5, fill="x", expand=True)
+        self.y_pos_label = ctk.CTkLabel(y_pos_frame, text="0.0", width=50)
+        self.y_pos_label.pack(side="right", padx=5)
         
         # Text input
         ctk.CTkLabel(content, text="Annotation Text:").pack(anchor="w", pady=(10, 2))
@@ -220,8 +246,74 @@ class AnnotationDialog:
         
         # Options
         ctk.CTkCheckBox(content, text="Show Arrow", variable=self.arrow_var).pack(anchor="w", pady=2)
+        
+        # Arrow properties (only visible when arrow is enabled)
+        arrow_frame = ctk.CTkFrame(content)
+        arrow_frame.pack(fill="x", pady=5)
+        
+        # Arrow orientation
+        orientation_frame = ctk.CTkFrame(arrow_frame)
+        orientation_frame.pack(fill="x", pady=2)
+        ctk.CTkLabel(orientation_frame, text="Arrow Direction:", width=100).pack(side="left")
+        ctk.CTkComboBox(
+            orientation_frame,
+            variable=self.arrow_orientation_var,
+            values=["up", "down", "left", "right", "northeast", "northwest", "southeast", "southwest"],
+            width=120
+        ).pack(side="left", padx=5)
+        
+        # Arrow size
+        arrow_size_frame = ctk.CTkFrame(arrow_frame)
+        arrow_size_frame.pack(fill="x", pady=2)
+        ctk.CTkLabel(arrow_size_frame, text="Arrow Size:", width=100).pack(side="left")
+        ctk.CTkSlider(
+            arrow_size_frame,
+            from_=5,
+            to=30,
+            variable=self.arrow_size_var,
+            width=120
+        ).pack(side="left", padx=5)
+        
+        # Line thickness
+        line_thickness_frame = ctk.CTkFrame(content)
+        line_thickness_frame.pack(fill="x", pady=5)
+        ctk.CTkLabel(line_thickness_frame, text="Line Thickness:", width=100).pack(side="left")
+        ctk.CTkSlider(
+            line_thickness_frame,
+            from_=0.5,
+            to=5.0,
+            variable=self.line_thickness_var,
+            width=150
+        ).pack(side="left", padx=5)
+        
+        # Background and border options
         ctk.CTkCheckBox(content, text="Background", variable=self.background_var).pack(anchor="w", pady=2)
+        
+        # Background alpha (only visible when background is enabled)
+        bg_alpha_frame = ctk.CTkFrame(content)
+        bg_alpha_frame.pack(fill="x", pady=2)
+        ctk.CTkLabel(bg_alpha_frame, text="Background Alpha:", width=120).pack(side="left")
+        ctk.CTkSlider(
+            bg_alpha_frame,
+            from_=0.1,
+            to=1.0,
+            variable=self.background_alpha_var,
+            width=130
+        ).pack(side="left", padx=5)
+        
         ctk.CTkCheckBox(content, text="Border", variable=self.border_var).pack(anchor="w", pady=2)
+        
+        # Border thickness (only visible when border is enabled)
+        border_thickness_frame = ctk.CTkFrame(content)
+        border_thickness_frame.pack(fill="x", pady=2)
+        ctk.CTkLabel(border_thickness_frame, text="Border Thickness:", width=120).pack(side="left")
+        ctk.CTkSlider(
+            border_thickness_frame,
+            from_=0.5,
+            to=3.0,
+            variable=self.border_thickness_var,
+            width=130
+        ).pack(side="left", padx=5)
         
         # Update button
         ctk.CTkButton(
@@ -364,6 +456,35 @@ class AnnotationDialog:
         self.background_var.set(template.get("background", False))
         self.border_var.set(template.get("border", False))
     
+    def _update_position_from_slider(self, value):
+        """Update position labels when sliders change"""
+        # Update the position labels with current slider values
+        if hasattr(self, 'x_pos_label'):
+            self.x_pos_label.configure(text=f"{self.x_pos_var.get():.1f}")
+        if hasattr(self, 'y_pos_label'):
+            self.y_pos_label.configure(text=f"{self.y_pos_var.get():.1f}")
+    
+    def _bind_coordinates_to_plot(self):
+        """Bind slider coordinates to plot axes for real-time preview"""
+        if self.axes and hasattr(self.axes, 'get_xlim') and hasattr(self.axes, 'get_ylim'):
+            try:
+                # Get current plot limits
+                x_min, x_max = self.axes.get_xlim()
+                y_min, y_max = self.axes.get_ylim()
+                
+                # Update slider ranges to match plot coordinates
+                if hasattr(self, 'x_pos_slider'):
+                    self.x_pos_slider.configure(from_=x_min, to=x_max)
+                if hasattr(self, 'y_pos_slider'):
+                    self.y_pos_slider.configure(from_=y_min, to=y_max)
+                    
+                # Set initial positions to center of plot
+                self.x_pos_var.set((x_min + x_max) / 2)
+                self.y_pos_var.set((y_min + y_max) / 2)
+                
+            except Exception as e:
+                logger.warning(f"Could not bind coordinates to plot: {e}")
+    
     def _create_annotation(self):
         """Create new annotation"""
         try:
@@ -381,7 +502,12 @@ class AnnotationDialog:
                 font_weight=self.font_weight_var.get(),
                 show_arrow=self.arrow_var.get(),
                 background=self.background_var.get(),
-                border=self.border_var.get()
+                border=self.border_var.get(),
+                arrow_orientation=self.arrow_orientation_var.get(),
+                line_thickness=self.line_thickness_var.get(),
+                arrow_size=self.arrow_size_var.get(),
+                background_alpha=self.background_alpha_var.get(),
+                border_thickness=self.border_thickness_var.get()
             )
             
             # Add to manager
@@ -416,6 +542,11 @@ class AnnotationDialog:
             self.current_annotation.show_arrow = self.arrow_var.get()
             self.current_annotation.background = self.background_var.get()
             self.current_annotation.border = self.border_var.get()
+            self.current_annotation.arrow_orientation = self.arrow_orientation_var.get()
+            self.current_annotation.line_thickness = self.line_thickness_var.get()
+            self.current_annotation.arrow_size = self.arrow_size_var.get()
+            self.current_annotation.background_alpha = self.background_alpha_var.get()
+            self.current_annotation.border_thickness = self.border_thickness_var.get()
             
             # Update in manager
             self.annotation_manager.update_annotation(self.current_annotation)

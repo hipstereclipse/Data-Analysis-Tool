@@ -52,11 +52,10 @@ from ui.panels import FilePanel, SeriesPanel, PlotPanel, ConfigPanel
 # Import UI dialogs and components directly from dialogs module
 from ui.dialogs import (
     SeriesConfigDialog, VacuumAnalysisDialog, AnnotationDialog,
-    DataSelectorDialog, PlotConfigDialog, ExportDialog
+    DataSelectorDialog, PlotConfigDialog, ExportDialog, StatisticalAnalysisDialog
 )
 from ui.series_dialog import show_series_dialog
 from ui.annotation_dialog import show_annotation_dialog
-from ui.analysis_dialog import AnalysisDialog
 
 # Import core managers
 from core.file_manager import FileManager
@@ -129,7 +128,7 @@ class ExcelDataPlotter(ctk.CTk):
         # Initialize managers
         self.file_manager = FileManager()
         self.plot_manager = PlotManager()
-        self.theme_manager = ThemeManager()
+        self.theme_manager = theme_manager  # Use the global singleton
         self.enhanced_plot_manager = None  # Will be initialized when figure is created
         self.annotation_manager = AnnotationManager()
         self.project_manager = ProjectManager()
@@ -524,16 +523,13 @@ class ExcelDataPlotter(ctk.CTk):
         self.start_var = tk.IntVar(value=0)
         self.end_var = tk.IntVar(value=100)
         
-        # Dual-handle range slider
+        # CustomTkinter dual-handle range slider
         self.dual_range_slider = DualRangeSlider(
             slider_frame,
             from_=0,
             to=100,
             start_var=self.start_var,
-            end_var=self.end_var,
-            start_command=self.on_start_slider_change,
-            end_command=self.on_end_slider_change,
-            height=65  # More compact height
+            end_var=self.end_var
         )
         self.dual_range_slider.pack(fill="x", padx=2, pady=2)
         
@@ -1255,7 +1251,11 @@ class ExcelDataPlotter(ctk.CTk):
             
             # Clear existing preview content
             for widget in self.series_preview_frame.winfo_children():
-                widget.destroy()
+                try:
+                    widget.destroy()
+                except Exception:
+                    # Widget already destroyed, ignore
+                    pass
             
             # Create matplotlib figure for preview
             from matplotlib.figure import Figure
@@ -1324,15 +1324,17 @@ class ExcelDataPlotter(ctk.CTk):
                 x_clean = np.array(x_clean)
                 y_clean = np.array(y_clean)
                 
-                # Plot the data with styled appearance
-                line_color = '#3b82f6'  # Blue color
+                # Plot the data with themed colors
+                line_color = self.theme_manager.get_color("accent")
+                scatter_color = line_color
+                edge_color = self.theme_manager.get_color("fg_primary")
                 preview_ax.plot(x_clean, y_clean, linewidth=1.5, alpha=0.9, color=line_color, antialiased=True)
                 
                 # Add scatter points for better visibility (but not too many)
                 scatter_step = max(1, len(x_clean) // 50)
                 if scatter_step > 0:
                     preview_ax.scatter(x_clean[::scatter_step], y_clean[::scatter_step], 
-                                     s=15, alpha=0.7, color='#1d4ed8', edgecolors='white', linewidth=0.5)
+                                     s=15, alpha=0.7, color=scatter_color, edgecolors=edge_color, linewidth=0.5)
             
             # Customize the plot
             preview_ax.set_title(f"Preview: {series_name}", fontsize=11, pad=10)
@@ -1341,17 +1343,20 @@ class ExcelDataPlotter(ctk.CTk):
             preview_ax.tick_params(labelsize=8)
             preview_ax.grid(True, alpha=0.3)
             
-            # Set background to match theme
-            preview_ax.set_facecolor('#2b2b2b')
-            preview_fig.patch.set_facecolor('#2b2b2b')
-            preview_ax.tick_params(colors='white')
-            preview_ax.xaxis.label.set_color('white')
-            preview_ax.yaxis.label.set_color('white')
-            preview_ax.title.set_color('white')
-            preview_ax.spines['bottom'].set_color('white')
-            preview_ax.spines['top'].set_color('white')
-            preview_ax.spines['right'].set_color('white')
-            preview_ax.spines['left'].set_color('white')
+            # Set background to match current theme
+            bg_color = self.theme_manager.get_color("bg_secondary")
+            text_color = self.theme_manager.get_color("fg_primary")
+            preview_ax.set_facecolor(bg_color)
+            preview_fig.patch.set_facecolor(bg_color)
+            preview_fig.patch.set_alpha(1.0)  # Make sure background is opaque
+            preview_ax.tick_params(colors=text_color)
+            preview_ax.xaxis.label.set_color(text_color)
+            preview_ax.yaxis.label.set_color(text_color)
+            preview_ax.title.set_color(text_color)
+            preview_ax.spines['bottom'].set_color(text_color)
+            preview_ax.spines['top'].set_color(text_color)
+            preview_ax.spines['right'].set_color(text_color)
+            preview_ax.spines['left'].set_color(text_color)
             
             # Tight layout
             preview_fig.tight_layout(pad=1.0)
@@ -1963,6 +1968,18 @@ class ExcelDataPlotter(ctk.CTk):
         except Exception as e:
             logger.error(f"Error in auto-refresh: {e}")
 
+    def _safe_finalize_canvas_display(self, canvas_widget):
+        """Safely finalize canvas display with error handling for destroyed widgets"""
+        try:
+            # Check if widget still exists and is valid
+            if canvas_widget.winfo_exists():
+                self._finalize_canvas_display(canvas_widget)
+        except tk.TclError as e:
+            # Widget was destroyed before callback executed
+            logger.debug(f"Canvas widget destroyed before finalization: {e}")
+        except Exception as e:
+            logger.error(f"Error in safe canvas finalization: {e}")
+
     def _finalize_canvas_display(self, canvas_widget):
         """Finalize canvas display after layout updates"""
         try:
@@ -2094,7 +2111,10 @@ class ExcelDataPlotter(ctk.CTk):
             # Create dialog instance with correct parameters
             files_dict = {series.file_id: file_data}  # Convert to expected format
             dialog = SeriesDialog(self, files_dict, series, mode="edit")
-            dialog_result = dialog.show_dialog()
+            
+            # Wait for dialog to complete
+            self.wait_window(dialog.dialog)
+            dialog_result = dialog.result
             
             # Handle the result if needed
             if dialog_result:
@@ -2517,9 +2537,24 @@ class ExcelDataPlotter(ctk.CTk):
             self.empty_plot_frame.grid_forget()
 
             if self.canvas:
-                self.canvas.get_tk_widget().destroy()
+                try:
+                    # Cancel any pending after_idle callbacks that might reference the canvas
+                    canvas_widget = self.canvas.get_tk_widget()
+                    if canvas_widget.winfo_exists():
+                        canvas_widget.destroy()
+                except tk.TclError:
+                    # Canvas already destroyed or invalid
+                    pass
+                finally:
+                    self.canvas = None
+                    
             if self.toolbar:
-                self.toolbar.destroy()
+                try:
+                    self.toolbar.destroy()
+                except tk.TclError:
+                    pass
+                finally:
+                    self.toolbar = None
 
             # Set theme-appropriate matplotlib style and colors
             is_dark_theme = ctk.get_appearance_mode() == "Dark"
@@ -2607,7 +2642,7 @@ class ExcelDataPlotter(ctk.CTk):
             self.canvas.draw_idle()
             
             # Give the widget system time to process the layout
-            self.after_idle(lambda: self._finalize_canvas_display(canvas_widget))
+            self.after_idle(lambda: self._safe_finalize_canvas_display(canvas_widget))
             
             logger.info("Canvas and plot area updated")
             
@@ -3025,9 +3060,10 @@ class ExcelDataPlotter(ctk.CTk):
                 return
                 
             # Show the new enhanced analysis dialog
-            dialog = AnalysisDialog(self, self.all_series, self.loaded_files)
+            dialog = StatisticalAnalysisDialog(self, self.all_series, self.loaded_files, 
+                                             self.statistical_analyzer, self.vacuum_analyzer)
             try:
-                dialog.focus()  # Bring dialog to front
+                dialog.dialog.lift()  # Bring dialog to front
             except tk.TclError:
                 # Dialog might have been destroyed before focusing
                 pass
@@ -3260,16 +3296,40 @@ class ExcelDataPlotter(ctk.CTk):
 
     def toggle_theme(self):
         """Toggle between dark and light themes"""
+        logger.info("Theme toggle requested")
+        
         # Use the enhanced theme manager for proper theming
+        old_theme = self.theme_manager.current_theme
         self.theme_manager.toggle_theme()
+        new_theme = self.theme_manager.current_theme
+        
+        logger.info(f"Theme changed from {old_theme} to {new_theme}")
         
         # Get the new theme name for status message
-        new_theme = self.theme_manager.current_theme
         self.status_bar.set_status(f"Theme changed to: {new_theme.title()}", "info")
 
         # Recreate the plot with new theme if it exists
         if self.figure:
+            logger.info("Refreshing main plot")
             self.create_plot()
+            
+        # Refresh the live preview if currently showing series editing
+        if (self.preview_mode == "series_editing" and 
+            hasattr(self, 'series_preview_frame') and 
+            self.series_preview_frame.winfo_exists()):
+            try:
+                logger.info("Refreshing live preview")
+                self.update_series_preview_from_form()
+            except Exception as e:
+                logger.error(f"Error refreshing preview: {e}")
+            
+        # Refresh dual range slider theme
+        if hasattr(self, 'dual_range_slider') and self.dual_range_slider:
+            try:
+                logger.info("Refreshing dual range slider")
+                self.dual_range_slider.refresh_theme()
+            except Exception as e:
+                logger.error(f"Error refreshing dual range slider theme: {e}")
             
         # Refresh theme for all open dialogs
         for dialog in self.open_dialogs[:]:  # Use slice to avoid modification during iteration
@@ -3480,7 +3540,7 @@ class ExcelDataPlotter(ctk.CTk):
                 
             # Use the legacy statistical analyzer for now
             from ui.dialogs import StatisticalAnalysisDialog
-            dialog = StatisticalAnalysisDialog(self, self.all_series, self.loaded_files, self.statistical_analyzer)
+            dialog = StatisticalAnalysisDialog(self, self.all_series, self.loaded_files, self.statistical_analyzer, self.vacuum_analyzer)
             self.status_bar.set_status("Statistical analysis opened", "info")
             
         except ImportError:

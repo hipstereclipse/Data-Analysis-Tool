@@ -5,7 +5,7 @@ Complete implementation with all constants from original application
 """
 
 from enum import Enum
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 
 
 class AppConfig:
@@ -128,6 +128,7 @@ class PlotConfig:
 
 class FileTypes(Enum):
     """Supported file types"""
+    DATA = ("Data Files", ["*.xlsx", "*.xls", "*.xlsm", "*.xlsb", "*.csv", "*.tsv", "*.txt"])
     EXCEL = ("Excel Files", ["*.xlsx", "*.xls", "*.xlsm", "*.xlsb"])
     CSV = ("CSV Files", ["*.csv", "*.tsv", "*.txt"])
     PROJECT = ("Project Files", ["*.edp"])
@@ -140,6 +141,11 @@ class FileTypes(Enum):
     @property
     def extensions(self) -> List[str]:
         return self.value[1]
+    
+    @property
+    def filedialog_tuple(self) -> Tuple[str, str]:
+        """Get tuple format for tkinter filedialog filetypes"""
+        return (self.description, " ".join(self.extensions))
 
 
 class PlotTypes(Enum):

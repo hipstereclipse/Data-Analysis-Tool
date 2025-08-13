@@ -878,11 +878,12 @@ class ExcelDataPlotter(ctk.CTk):
     def add_files(self):
         """Add multiple files with progress indication"""
         filenames = filedialog.askopenfilenames(
-            title="Select Excel/CSV files",
+            title="Select Data Files",
             filetypes=[
-                ("Excel files", "*.xlsx *.xls"),
-                ("CSV files", "*.csv"),
-                ("All files", "*.*")
+                FileTypes.DATA.filedialog_tuple,
+                FileTypes.EXCEL.filedialog_tuple,
+                FileTypes.CSV.filedialog_tuple,
+                FileTypes.ALL.filedialog_tuple
             ]
         )
 
@@ -3401,16 +3402,14 @@ class ExcelDataPlotter(ctk.CTk):
 
     def export_dataframe(self, df, filename):
         """Export a dataframe to Excel or CSV"""
-        filetypes = [
-            ("Excel files", "*.xlsx"),
-            ("CSV files", "*.csv"),
-            ("All files", "*.*")
-        ]
-
         export_filename = filedialog.asksaveasfilename(
             title=f"Export {os.path.basename(filename)}",
             defaultextension=".xlsx",
-            filetypes=filetypes
+            filetypes=[
+                FileTypes.EXCEL.filedialog_tuple,
+                FileTypes.CSV.filedialog_tuple,
+                FileTypes.ALL.filedialog_tuple
+            ]
         )
 
         if export_filename:

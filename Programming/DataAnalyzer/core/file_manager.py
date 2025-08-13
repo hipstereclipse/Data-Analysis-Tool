@@ -13,6 +13,7 @@ from tkinter import filedialog
 import os
 
 from models.data_models import FileData
+from config.constants import FileTypes
 
 logger = logging.getLogger(__name__)
 
@@ -237,9 +238,10 @@ class FileManager:
         """
         if not filetypes:
             filetypes = [
-                ("Excel files", "*.xlsx *.xls *.xlsm"),
-                ("CSV files", "*.csv *.tsv"),
-                ("All files", "*.*")
+                FileTypes.DATA.filedialog_tuple,
+                FileTypes.EXCEL.filedialog_tuple,
+                FileTypes.CSV.filedialog_tuple,
+                FileTypes.ALL.filedialog_tuple
             ]
 
         filepath = filedialog.askopenfilename(title=title, filetypes=filetypes)
@@ -259,9 +261,10 @@ class FileManager:
         """
         if not filetypes:
             filetypes = [
-                ("Excel files", "*.xlsx *.xls *.xlsm"),
-                ("CSV files", "*.csv *.tsv"),
-                ("All files", "*.*")
+                FileTypes.DATA.filedialog_tuple,
+                FileTypes.EXCEL.filedialog_tuple,
+                FileTypes.CSV.filedialog_tuple,
+                FileTypes.ALL.filedialog_tuple
             ]
 
         filepaths = filedialog.askopenfilenames(title=title, filetypes=filetypes)
@@ -283,9 +286,9 @@ class FileManager:
         """
         if not filetypes:
             filetypes = [
-                ("Excel files", "*.xlsx"),
-                ("CSV files", "*.csv"),
-                ("All files", "*.*")
+                FileTypes.EXCEL.filedialog_tuple,
+                FileTypes.CSV.filedialog_tuple,
+                FileTypes.ALL.filedialog_tuple
             ]
 
         filepath = filedialog.asksaveasfilename(

@@ -1596,7 +1596,8 @@ class ExcelDataPlotter(ctk.CTk):
         self.all_series[series.id] = series
         self.add_series_card(series)
         
-        # Update plot button text
+        # Update counts and plot button
+        self.update_counts()  # Add this line to update the series count
         self.update_plot_button_text()
 
         # Update form for next series with incremented name
@@ -1608,18 +1609,24 @@ class ExcelDataPlotter(ctk.CTk):
         card = ctk.CTkFrame(self.series_scroll, corner_radius=8)
         card.pack(fill="x", pady=3, padx=4)
 
-        # Single compact row layout with better spacing
-        row_frame = ctk.CTkFrame(card, corner_radius=6)
-        row_frame.pack(fill="x", padx=4, pady=4)
+        # Main container with proper grid layout to ensure buttons are visible
+        main_container = ctk.CTkFrame(card, corner_radius=6)
+        main_container.pack(fill="x", padx=4, pady=4)
+        main_container.grid_columnconfigure(0, weight=1)  # Left side expands
+        main_container.grid_columnconfigure(1, weight=0)  # Right side fixed width
 
-        # Left side: Visibility + Clickable Color indicator + Name
-        left_frame = ctk.CTkFrame(row_frame, fg_color="transparent")
-        left_frame.pack(side="left", fill="x", expand=True)
+        # Left side: Visibility + Color + Series Info
+        left_frame = ctk.CTkFrame(main_container, fg_color="transparent")
+        left_frame.grid(row=0, column=0, sticky="ew", padx=(0, 10))
 
-        # Visibility checkbox with better styling
+        # Controls row (checkbox + color + name)
+        controls_frame = ctk.CTkFrame(left_frame, fg_color="transparent")
+        controls_frame.pack(fill="x")
+
+        # Visibility checkbox
         visibility_var = ctk.BooleanVar(value=getattr(series, 'visible', True))
         visibility_check = ctk.CTkCheckBox(
-            left_frame, 
+            controls_frame, 
             text="", 
             variable=visibility_var,
             width=18,
@@ -1628,12 +1635,9 @@ class ExcelDataPlotter(ctk.CTk):
         )
         visibility_check.pack(side="left", padx=(4, 8))
 
-        # Enhanced clickable color indicator with tooltip-like behavior
-        color_container = ctk.CTkFrame(left_frame, fg_color="transparent")
-        color_container.pack(side="left", padx=(0, 8))
-        
+        # Color indicator
         color_button = ctk.CTkButton(
-            color_container, 
+            controls_frame, 
             text="", 
             width=20, 
             height=20, 
@@ -1642,9 +1646,7 @@ class ExcelDataPlotter(ctk.CTk):
             hover_color=self._adjust_color_brightness(series.color, 0.8),
             command=lambda s=series: self.quick_change_series_color(s)
         )
-        color_button.pack()
-        
-        # Add tooltip for color button
+        color_button.pack(side="left", padx=(0, 8))
         self._add_tooltip(color_button, "Click to change color")
         
         # Store reference for color updates
@@ -1652,38 +1654,33 @@ class ExcelDataPlotter(ctk.CTk):
             self.series_color_frames = {}
         self.series_color_frames[series.id] = color_button
 
-        # Series name and info (enhanced styling)
-        info_frame = ctk.CTkFrame(left_frame, fg_color="transparent")
-        info_frame.pack(side="left", fill="x", expand=True, padx=(0, 5))
-        
-        # Name on top line with better typography
+        # Series name
         series_title = ctk.CTkLabel(
-            info_frame, 
+            controls_frame, 
             text=series.name, 
             font=ctk.CTkFont(size=12, weight="bold"),
             anchor="w"
         )
-        series_title.pack(anchor="w", fill="x")
-        
-        # Enhanced data info on bottom line
+        series_title.pack(side="left", fill="x", expand=True)
+
+        # Info row (file and data details)
         file_info = self.loaded_files.get(series.file_id)
         file_name = file_info.filename[:18] + "..." if file_info and len(file_info.filename) > 18 else (file_info.filename if file_info else "Unknown")
         data_points = (series.end_index or len(file_info.df)) - (series.start_index or 0) if file_info else 0
         
-        # More compact and informative display
         info_text = f"📁 {file_name} • {series.x_column}→{series.y_column} • {data_points:,}pts"
         info_label = ctk.CTkLabel(
-            info_frame, 
+            left_frame, 
             text=info_text, 
             font=ctk.CTkFont(size=9), 
             text_color=("gray60", "gray50"),
             anchor="w"
         )
-        info_label.pack(anchor="w", fill="x")
+        info_label.pack(fill="x", padx=(32, 0))
 
-        # Right side: Clear Delete and Configure buttons
-        btn_frame = ctk.CTkFrame(row_frame, fg_color="transparent")
-        btn_frame.pack(side="right", padx=4)
+        # Right side: Action buttons
+        btn_frame = ctk.CTkFrame(main_container, fg_color="transparent")
+        btn_frame.grid(row=0, column=1, sticky="e", padx=(5, 0))
 
         # Configure button - primary action
         configure_btn = ctk.CTkButton(
@@ -2558,6 +2555,9 @@ class ExcelDataPlotter(ctk.CTk):
                 # Update the visual card
                 self.update_series_card(series.id, dialog_result)
                 
+                # Update counts after series modification
+                self.update_counts()
+                
                 # Refresh the plot
                 self.refresh_plot()
                 
@@ -3101,6 +3101,9 @@ class ExcelDataPlotter(ctk.CTk):
                 self.status_bar.set_status(f"Plot created successfully with {len(visible_series)} series", "success")
             else:
                 self.status_bar.set_status("Plot created but no data series visible", "warning")
+                
+            # Update counts to reflect current state after plot creation
+            self.update_counts()
 
         except Exception as e:
             self.status_bar.hide_progress()

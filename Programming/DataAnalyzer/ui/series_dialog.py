@@ -50,8 +50,16 @@ class SeriesDialog:
         if mode == "edit" and series:
             self._load_series_config()
             
-        # Center dialog
-        UIFactory.center_window(self.dialog, 1200, 800)
+        # Get screen dimensions and set responsive size
+        screen_width = self.dialog.winfo_screenwidth()
+        screen_height = self.dialog.winfo_screenheight()
+        
+        # Use 80% of screen size, but cap at reasonable maximum
+        dialog_width = min(1200, int(screen_width * 0.8))
+        dialog_height = min(800, int(screen_height * 0.8))
+        
+        # Center dialog with responsive size
+        UIFactory.center_window(self.dialog, dialog_width, dialog_height)
         
         # Initial preview update
         self._update_preview()
@@ -187,10 +195,23 @@ class SeriesDialog:
             to=1000,
             start_var=self.start_var,
             end_var=self.end_var,
-            start_command=lambda x: self._update_preview(),
-            end_command=lambda x: self._update_preview()
+            start_command=lambda x: self._update_range_display(),
+            end_command=lambda x: self._update_range_display()
         )
         self.range_slider.pack(fill="x", pady=5)
+        
+        # Timestamp display frame
+        timestamp_frame = ctk.CTkFrame(content)
+        timestamp_frame.pack(fill="x", pady=2)
+        timestamp_frame.grid_columnconfigure(0, weight=1)
+        timestamp_frame.grid_columnconfigure(1, weight=1)
+        
+        # Start and end timestamp labels
+        self.start_timestamp_label = ctk.CTkLabel(timestamp_frame, text="Start: Index 0", font=("Arial", 10))
+        self.start_timestamp_label.grid(row=0, column=0, sticky="w", padx=5)
+        
+        self.end_timestamp_label = ctk.CTkLabel(timestamp_frame, text="End: Index 1000", font=("Arial", 10))
+        self.end_timestamp_label.grid(row=0, column=1, sticky="e", padx=5)
     
     def _create_visual_section(self, parent):
         """Create visual properties section"""
@@ -418,39 +439,114 @@ class SeriesDialog:
                 width=100
             ).pack(side="right", padx=5)
     
-    def _on_file_change(self, filename: str):
+    def _on_file_change(self, file_key: str):
         """Handle file selection change"""
-        # Find file data
+        # Get file data by key (could be filename or file_id)
         file_data = None
-        for f in self.files.values():
-            if f.filename == filename:
-                file_data = f
-                break
+        
+        # First try direct key lookup
+        if file_key in self.files:
+            file_data = self.files[file_key]
+        else:
+            # Fall back to searching by filename
+            for f in self.files.values():
+                if f.filename == file_key:
+                    file_data = f
+                    break
         
         if not file_data:
+            logger.warning(f"Could not find file data for key: {file_key}")
             return
         
-        # Update column lists
-        columns = ["Index"] + list(file_data.data.columns)
+        # Update column lists - use the data attribute correctly
+        df = file_data.data if hasattr(file_data, 'data') else file_data.df
+        columns = ["Index"] + list(df.columns)
         
         if hasattr(self, 'x_combo'):
             self.x_combo.configure(values=columns)
             self.y_combo.configure(values=columns[1:])  # Exclude Index for Y
             
-            # Set defaults
+            # Set defaults if not already set
             if not self.x_column_var.get():
                 self.x_combo.set(columns[0])
             
-            numeric_cols = file_data.get_numeric_columns()
+            # Find numeric columns
+            numeric_cols = []
+            for col in df.columns:
+                if pd.api.types.is_numeric_dtype(df[col]):
+                    numeric_cols.append(col)
+                    
             if numeric_cols and not self.y_column_var.get():
                 self.y_combo.set(numeric_cols[0])
             
             # Update range slider
-            data_length = len(file_data.data)
-            self.range_slider.to = data_length
-            self.end_var.set(min(1000, data_length))
+            data_length = len(df)
+            if hasattr(self, 'range_slider'):
+                self.range_slider.configure_range(from_=0, to=data_length-1)
+                self.end_var.set(min(1000, data_length))
             
-            self._update_preview()
+            # Update both range display and preview
+            if hasattr(self, 'start_timestamp_label'):
+                self._update_range_display()
+            else:
+                self._update_preview()
+    
+    def _update_range_display(self):
+        """Update the timestamp display for range slider"""
+        try:
+            # Get current file data
+            file_key = self.file_var.get()
+            if not file_key:
+                self.start_timestamp_label.configure(text=f"Start: Index {self.start_var.get()}")
+                self.end_timestamp_label.configure(text=f"End: Index {self.end_var.get()}")
+                self._update_preview()
+                return
+            
+            # Get file data
+            file_data = None
+            if file_key in self.files:
+                file_data = self.files[file_key]
+            else:
+                for f in self.files.values():
+                    if f.filename == file_key:
+                        file_data = f
+                        break
+            
+            if not file_data:
+                self.start_timestamp_label.configure(text=f"Start: Index {self.start_var.get()}")
+                self.end_timestamp_label.configure(text=f"End: Index {self.end_var.get()}")
+                self._update_preview()
+                return
+            
+            # Get dataframe
+            df = file_data.data if hasattr(file_data, 'data') else file_data.df
+            start_idx = self.start_var.get()
+            end_idx = self.end_var.get()
+            
+            # Check if we have a timestamp column
+            x_col = self.x_column_var.get()
+            if x_col and x_col in df.columns and x_col.lower() in ['timestamp', 'time', 'datetime']:
+                try:
+                    # Get timestamp values at start and end indices
+                    start_time = df.iloc[start_idx][x_col] if start_idx < len(df) else "N/A"
+                    end_time = df.iloc[min(end_idx-1, len(df)-1)][x_col] if end_idx > 0 else "N/A"
+                    
+                    self.start_timestamp_label.configure(text=f"Start: {start_time}")
+                    self.end_timestamp_label.configure(text=f"End: {end_time}")
+                except:
+                    self.start_timestamp_label.configure(text=f"Start: Index {start_idx}")
+                    self.end_timestamp_label.configure(text=f"End: Index {end_idx}")
+            else:
+                self.start_timestamp_label.configure(text=f"Start: Index {start_idx}")
+                self.end_timestamp_label.configure(text=f"End: Index {end_idx}")
+                
+        except Exception as e:
+            logger.error(f"Error updating range display: {e}")
+            self.start_timestamp_label.configure(text=f"Start: Index {self.start_var.get()}")
+            self.end_timestamp_label.configure(text=f"End: Index {self.end_var.get()}")
+        
+        # Update preview after range display
+        self._update_preview()
     
     def _choose_color(self):
         """Open color chooser"""
@@ -565,17 +661,23 @@ class SeriesDialog:
         """Get current data based on selections"""
         try:
             # Get file
-            filename = self.file_var.get()
-            if not filename:
+            file_key = self.file_var.get()
+            if not file_key:
                 return np.array([]), np.array([])
             
+            # Get file data by key (could be filename or file_id)
             file_data = None
-            for f in self.files.values():
-                if f.filename == filename:
-                    file_data = f
-                    break
+            if file_key in self.files:
+                file_data = self.files[file_key]
+            else:
+                # Fall back to searching by filename
+                for f in self.files.values():
+                    if f.filename == file_key:
+                        file_data = f
+                        break
             
             if not file_data:
+                logger.warning(f"Could not find file data for key: {file_key}")
                 return np.array([]), np.array([])
             
             # Get columns
@@ -585,23 +687,51 @@ class SeriesDialog:
             if not x_col or not y_col:
                 return np.array([]), np.array([])
             
-            # Get data slice
+            # Get data slice - use the correct data attribute
+            df = file_data.data if hasattr(file_data, 'data') else file_data.df
             start_idx = self.start_var.get()
             end_idx = self.end_var.get()
-            data_slice = file_data.data.iloc[start_idx:end_idx]
+            
+            # Ensure indices are within bounds
+            start_idx = max(0, start_idx)
+            end_idx = min(len(df), end_idx)
+            
+            if start_idx >= end_idx:
+                return np.array([]), np.array([])
+                
+            data_slice = df.iloc[start_idx:end_idx]
             
             # Get X data
             if x_col == "Index":
                 x_data = np.arange(len(data_slice))
             else:
                 x_data = data_slice[x_col].values
-                if pd.api.types.is_object_dtype(x_data):
-                    x_data = pd.to_numeric(x_data, errors='coerce')
+                if pd.api.types.is_object_dtype(x_data) or pd.api.types.is_string_dtype(x_data):
+                    # Try to convert to datetime first, then to numeric
+                    try:
+                        x_data_dt = pd.to_datetime(x_data)
+                        # Convert datetime to seconds since the first timestamp
+                        x_data = (x_data_dt - x_data_dt.min()).dt.total_seconds().values
+                    except:
+                        # If datetime conversion fails, try numeric conversion
+                        x_data = pd.to_numeric(x_data, errors='coerce').values
+                
+                # Ensure data is numeric numpy array
+                x_data = np.asarray(x_data, dtype=float)
             
             # Get Y data
             y_data = data_slice[y_col].values
-            if pd.api.types.is_object_dtype(y_data):
-                y_data = pd.to_numeric(y_data, errors='coerce')
+            if pd.api.types.is_object_dtype(y_data) or pd.api.types.is_string_dtype(y_data):
+                try:
+                    # Try datetime conversion first
+                    y_data_dt = pd.to_datetime(y_data)
+                    y_data = (y_data_dt - y_data_dt.min()).dt.total_seconds().values
+                except:
+                    # Fall back to numeric conversion
+                    y_data = pd.to_numeric(y_data, errors='coerce').values
+            
+            # Ensure data is numeric numpy array
+            y_data = np.asarray(y_data, dtype=float)
             
             return x_data, y_data
             
@@ -665,11 +795,22 @@ class SeriesDialog:
             
             # Load file and columns
             if self.series.file_id:
-                for filename, file_data in self.files.items():
-                    if file_data.file_id == self.series.file_id:
-                        self.file_var.set(filename)
-                        self._on_file_change(filename)
-                        break
+                # Look for the file by ID (the key in the files dict should match the series.file_id)
+                if self.series.file_id in self.files:
+                    # Use the file_id as the key since that's how files_dict is structured
+                    self.file_var.set(self.series.file_id)
+                    self._on_file_change(self.series.file_id)
+                else:
+                    # Fallback: search by file_data.id 
+                    for file_key, file_data in self.files.items():
+                        if hasattr(file_data, 'id') and file_data.id == self.series.file_id:
+                            self.file_var.set(file_key)
+                            self._on_file_change(file_key)
+                            break
+                        elif hasattr(file_data, 'file_id') and file_data.file_id == self.series.file_id:
+                            self.file_var.set(file_key)
+                            self._on_file_change(file_key)
+                            break
             
             self.x_column_var.set(self.series.x_column or "")
             self.y_column_var.set(self.series.y_column or "")
@@ -701,13 +842,17 @@ class SeriesDialog:
                 messagebox.showerror("Error", "Please select a Y column")
                 return
             
-            # Get file data
-            file_data = None
-            for f in self.files.values():
-                if f.filename == self.file_var.get():
-                    file_data = f
-                    break
+            # Get file data using the file key (which is what's stored in file_var)
+            file_key = self.file_var.get()
+            file_data = self.files.get(file_key)
             
+            if not file_data:
+                # Fallback: try to find by filename in case the key is wrong
+                for key, f in self.files.items():
+                    if f.filename == file_key:
+                        file_data = f
+                        break
+                        
             if not file_data:
                 messagebox.showerror("Error", "Selected file not found")
                 return

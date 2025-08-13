@@ -140,7 +140,8 @@ def test_export_dialog_fix():
 
     app_path = Path("app.py")
     if app_path.exists():
-        with open(app_path, 'r') as f:
+        # Read with UTF-8 to support Unicode icons present in the UI source
+        with open(app_path, 'r', encoding='utf-8', errors='ignore') as f:
             content = f.read()
 
         if "ExportDialog(self, self.plot_manager)" in content:

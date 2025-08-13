@@ -51,9 +51,10 @@ from ui.components import StatusBar, QuickActionBar
 from ui.panels import FilePanel, SeriesPanel, PlotPanel, ConfigPanel
 # Import UI dialogs and components directly from dialogs module
 from ui.dialogs import (
-    SeriesConfigDialog, VacuumAnalysisDialog, AnnotationDialog,
+    SeriesConfigDialog, AnnotationDialog,
     DataSelectorDialog, PlotConfigDialog, ExportDialog, StatisticalAnalysisDialog
 )
+from ui.vacuum_analysis_dialog import VacuumAnalysisDialog
 from ui.series_dialog import show_series_dialog
 from ui.annotation_dialog import show_annotation_dialog
 
@@ -340,7 +341,6 @@ class ExcelDataPlotter(ctk.CTk):
 
         # Analysis actions (center)
         self.top_bar.add_action("Analysis", "�", self.show_statistical_analysis, "Statistical analysis tools", side="center")
-        self.top_bar.add_action("Vacuum Tools", "🎯", self.show_vacuum_analysis, "Vacuum analysis tools", side="center")
         self.top_bar.add_action("Annotations", "📝", self.show_annotation_panel, "Add annotations to plots (requires active plot)", side="center")
         self.top_bar.add_separator(side="center")
 
@@ -3034,22 +3034,33 @@ class ExcelDataPlotter(ctk.CTk):
 
     def show_vacuum_analysis(self):
         """Show vacuum-specific analysis tools"""
-        if self.all_series:
-            vacuum_dialog = VacuumAnalysisDialog(self, self.all_series, self.loaded_files, self.vacuum_analyzer)
-            
-            # Track the dialog for theme updates
-            self.open_dialogs.append(vacuum_dialog)
-            
-            # Remove dialog from tracking when it's closed
-            def on_dialog_close():
-                if vacuum_dialog in self.open_dialogs:
-                    self.open_dialogs.remove(vacuum_dialog)
-                vacuum_dialog.destroy()
-            
-            vacuum_dialog.protocol("WM_DELETE_WINDOW", on_dialog_close)
-            self.status_bar.set_status("Vacuum analysis tools opened", "info")
-        else:
+        if not self.all_series:
             self.status_bar.set_status("No series available for analysis", "warning")
+            return
+
+        # Instantiate dialog with expected signature from ui/vacuum_analysis_dialog.py
+        try:
+            dialog = VacuumAnalysisDialog(self, selected_series=None, all_series=self.all_series, loaded_files=self.loaded_files)
+
+            # Track the inner CTkToplevel for theme updates
+            dlg_window = getattr(dialog, 'dialog', dialog)
+            self.open_dialogs.append(dlg_window)
+
+            def on_dialog_close():
+                if dlg_window in self.open_dialogs:
+                    self.open_dialogs.remove(dlg_window)
+                try:
+                    dlg_window.destroy()
+                except Exception:
+                    pass
+
+            if hasattr(dlg_window, 'protocol'):
+                dlg_window.protocol("WM_DELETE_WINDOW", on_dialog_close)
+
+            self.status_bar.set_status("Vacuum analysis tools opened", "info")
+        except Exception as e:
+            logger.error(f"Failed to open Vacuum Analysis dialog: {e}")
+            self.status_bar.set_status("Error opening Vacuum Analysis", "error")
 
     def show_multi_analysis(self):
         """Show multi-series analysis dialog"""

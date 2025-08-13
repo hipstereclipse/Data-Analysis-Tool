@@ -9,6 +9,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 import uuid
+import warnings
 from pathlib import Path
 
 
@@ -129,7 +130,10 @@ class FileData:
                 else:
                     # Try to convert to datetime
                     try:
-                        datetime_series = pd.to_datetime(self.data[col], errors='coerce')
+                        # Try to infer datetime format automatically, suppressing warnings
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore")
+                            datetime_series = pd.to_datetime(self.data[col], errors='coerce', infer_datetime_format=True)
                         if not datetime_series.isna().all() and datetime_series.notna().sum() > 0:
                             self.data[col] = datetime_series
                             dtype = datetime_series.dtype
@@ -448,7 +452,12 @@ class AnnotationConfig:
     # Arrow properties
     arrow_style: str = "->"
     arrow_width: float = 1.0
+    arrow_mutation_scale: float = 12.0
     line_style: str = "-"
+    
+    # Point/marker properties
+    marker: Optional[str] = None
+    marker_size: float = 6.0
     
     # Legacy compatibility for dialogs that use different parameter names
     label: str = ""
@@ -476,18 +485,18 @@ class AnnotationConfig:
             self.text = self.label
     
     def __init__(self, **kwargs):
-        """Custom constructor to handle legacy 'type' parameter"""
+        """Custom constructor to handle legacy parameter mappings and set defaults"""
         # Handle legacy 'type' parameter
         if 'type' in kwargs:
             kwargs['annotation_type'] = kwargs.pop('type')
-        
-        # Handle annotation dialog parameter mappings
+
+        # Map various alternate parameter names used by older dialogs
         if 'x_position' in kwargs:
             kwargs['x'] = kwargs.pop('x_position')
         if 'y_position' in kwargs:
             kwargs['y'] = kwargs.pop('y_position')
         if 'show_arrow' in kwargs:
-            kwargs['arrow_style'] = '-> ' if kwargs.pop('show_arrow') else ''
+            kwargs['arrow_style'] = '->' if kwargs.pop('show_arrow') else ''
         if 'background' in kwargs:
             bg_enabled = kwargs.pop('background')
             if bg_enabled and 'color' in kwargs:
@@ -498,28 +507,21 @@ class AnnotationConfig:
                 kwargs['border_color'] = kwargs['color']
         if 'arrow_orientation' in kwargs:
             orientation = kwargs.pop('arrow_orientation')
-            # Map orientation to arrow style
             orientation_map = {
-                'up': '^',
-                'down': 'v', 
-                'left': '<',
-                'right': '>',
-                'northeast': '^>',
-                'northwest': '<^',
-                'southeast': 'v>',
-                'southwest': '<v'
+                'up': '^', 'down': 'v', 'left': '<', 'right': '>',
+                'northeast': '^>', 'northwest': '<^', 'southeast': 'v>', 'southwest': '<v'
             }
             kwargs['arrow_style'] = orientation_map.get(orientation, '->')
         if 'line_thickness' in kwargs:
             kwargs['arrow_width'] = kwargs.pop('line_thickness')
         if 'arrow_size' in kwargs:
-            kwargs['arrow_width'] = kwargs.pop('arrow_size')  # Use arrow_width for size
+            kwargs['arrow_width'] = kwargs.pop('arrow_size')
         if 'background_alpha' in kwargs:
             kwargs['alpha'] = kwargs.pop('background_alpha')
         if 'border_thickness' in kwargs:
             kwargs['border_width'] = kwargs.pop('border_thickness')
-        
-        # Set defaults first
+
+        # Set defaults
         self.annotation_id = kwargs.get('annotation_id', str(uuid.uuid4()))
         self.annotation_type = kwargs.get('annotation_type', 'text')
         self.text = kwargs.get('text', '')
@@ -527,12 +529,12 @@ class AnnotationConfig:
         self.y = kwargs.get('y', 0.0)
         self.x2 = kwargs.get('x2', 0.0)
         self.y2 = kwargs.get('y2', 0.0)
-        
+
         # Visual properties
         self.visible = kwargs.get('visible', True)
         self.color = kwargs.get('color', '#000000')
         self.alpha = kwargs.get('alpha', 1.0)
-        
+
         # Text properties
         self.font_size = kwargs.get('font_size', 12.0)
         self.font_family = kwargs.get('font_family', 'sans-serif')
@@ -541,30 +543,39 @@ class AnnotationConfig:
         self.horizontal_alignment = kwargs.get('horizontal_alignment', 'center')
         self.vertical_alignment = kwargs.get('vertical_alignment', 'center')
         self.rotation = kwargs.get('rotation', 0.0)
-        
+
         # Background and border
         self.background_color = kwargs.get('background_color')
         self.border_color = kwargs.get('border_color')
         self.border_width = kwargs.get('border_width', 1.0)
-        
+
         # Shape properties
         self.width = kwargs.get('width', 0.1)
         self.height = kwargs.get('height', 0.1)
         self.radius = kwargs.get('radius', 0.05)
         self.fill = kwargs.get('fill', False)
-        
-        # Arrow properties
+
+        # Arrow/line properties
         self.arrow_style = kwargs.get('arrow_style', '->')
         self.arrow_width = kwargs.get('arrow_width', 1.0)
+        # Map head_size or mutation_scale to arrow_mutation_scale
+        if 'head_size' in kwargs:
+            self.arrow_mutation_scale = kwargs.get('head_size', 12.0)
+        else:
+            self.arrow_mutation_scale = kwargs.get('arrow_mutation_scale', 12.0)
         self.line_style = kwargs.get('line_style', '-')
-        
+
+        # Point/marker properties
+        self.marker = kwargs.get('marker')
+        self.marker_size = kwargs.get('marker_size', 6.0)
+
         # Legacy compatibility
         self.label = kwargs.get('label', '')
         self.x_data = kwargs.get('x_data', 0.0)
         self.x_end = kwargs.get('x_end', 0.0)
         self.y_data = kwargs.get('y_data', 0.0)
         self.y_end = kwargs.get('y_end', 0.0)
-        
+
         # Handle legacy mappings
         if 'x_data' in kwargs:
             self.x = kwargs['x_data']

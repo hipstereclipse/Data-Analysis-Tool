@@ -139,6 +139,13 @@ class VacuumAnalysisDialog:
             width=100
         ).grid(row=0, column=4, padx=5, pady=5)
 
+        ctk.CTkButton(
+            controls_frame,
+            text="Add Base Pressure Annotation",
+            command=self.add_base_pressure_annotation,
+            width=220
+        ).grid(row=0, column=5, padx=5, pady=5)
+
         # Results frame
         results_frame = ctk.CTkFrame(tab)
         results_frame.pack(fill="both", expand=True, padx=10, pady=10)
@@ -179,6 +186,22 @@ class VacuumAnalysisDialog:
             command=self.analyze_leak_rate,
             width=100
         ).grid(row=0, column=4, padx=5, pady=5)
+
+        ctk.CTkButton(
+            controls_frame,
+            text="Annotate Leak Rate",
+            command=self.add_leak_rate_annotation,
+            width=180
+        ).grid(row=0, column=5, padx=5, pady=5)
+
+        # Annotation controls for leak rate (mirrored from spike detection)
+        ctk.CTkLabel(controls_frame, text="Color:").grid(row=1, column=0, sticky="w", padx=5, pady=5)
+        self.leak_color_var = tk.StringVar(value="blue")
+        ctk.CTkEntry(controls_frame, textvariable=self.leak_color_var, width=100).grid(row=1, column=1, padx=5, pady=5)
+
+        ctk.CTkLabel(controls_frame, text="Label:").grid(row=1, column=2, sticky="w", padx=5, pady=5)
+        self.leak_label_var = tk.StringVar(value="")
+        ctk.CTkEntry(controls_frame, textvariable=self.leak_label_var, width=180).grid(row=1, column=3, padx=5, pady=5)
 
         # Results
         results_frame = ctk.CTkFrame(tab)
@@ -258,6 +281,29 @@ class VacuumAnalysisDialog:
             width=100
         ).grid(row=0, column=4, padx=5, pady=5)
 
+        ctk.CTkButton(
+            controls_frame,
+            text="Annotate Top Spike",
+            command=self.add_top_spike_annotation,
+            width=180
+        ).grid(row=0, column=5, padx=5, pady=5)
+
+        # Optional UX: color and label inputs + annotate all
+        ctk.CTkLabel(controls_frame, text="Color:").grid(row=1, column=0, sticky="w", padx=5, pady=5)
+        self.spike_color_var = tk.StringVar(value="red")
+        ctk.CTkEntry(controls_frame, textvariable=self.spike_color_var, width=100).grid(row=1, column=1, padx=5, pady=5)
+
+        ctk.CTkLabel(controls_frame, text="Label:").grid(row=1, column=2, sticky="w", padx=5, pady=5)
+        self.spike_label_var = tk.StringVar(value="")
+        ctk.CTkEntry(controls_frame, textvariable=self.spike_label_var, width=180).grid(row=1, column=3, padx=5, pady=5)
+
+        ctk.CTkButton(
+            controls_frame,
+            text="Annotate All Spikes",
+            command=self.annotate_all_spikes,
+            width=180
+        ).grid(row=1, column=4, padx=5, pady=5)
+
         # Results
         results_frame = ctk.CTkFrame(tab)
         results_frame.pack(fill="both", expand=True, padx=10, pady=10)
@@ -292,6 +338,22 @@ class VacuumAnalysisDialog:
             command=self.analyze_pump_down,
             width=100
         ).grid(row=0, column=2, padx=5, pady=5)
+
+        ctk.CTkButton(
+            controls_frame,
+            text="Annotate Pumpdown Window",
+            command=self.add_pumpdown_annotation,
+            width=220
+        ).grid(row=0, column=3, padx=5, pady=5)
+
+        # Annotation controls for pump down (mirrored from spike detection)
+        ctk.CTkLabel(controls_frame, text="Color:").grid(row=1, column=0, sticky="w", padx=5, pady=5)
+        self.pumpdown_color_var = tk.StringVar(value="green")
+        ctk.CTkEntry(controls_frame, textvariable=self.pumpdown_color_var, width=100).grid(row=1, column=1, padx=5, pady=5)
+
+        ctk.CTkLabel(controls_frame, text="Label:").grid(row=1, column=2, sticky="w", padx=5, pady=5)
+        self.pumpdown_label_var = tk.StringVar(value="")
+        ctk.CTkEntry(controls_frame, textvariable=self.pumpdown_label_var, width=180).grid(row=1, column=3, padx=5, pady=5)
 
         # Results
         results_frame = ctk.CTkFrame(tab)
@@ -447,30 +509,73 @@ stability over time."""
             )
 
             # Create plot
-            self.create_leak_rate_plot(x_data, y_data, results['fitted_curve'])
+            if 'fitted_curve' in results:
+                self.create_leak_rate_plot(x_data, y_data, results['fitted_curve'])
+            elif 'linear_fit' in results:
+                self.create_leak_rate_plot(x_data, y_data, results['linear_fit'].get('fitted_curve', []))
 
-            # Display results
+            # Display enhanced results
             results_text = f"""Leak Rate Analysis Results:
 
-Leak Rate: {results['leak_rate']:.3e} mbar·L/s
-R-squared: {results['r_squared']:.4f}
-Time Constant: {results['time_constant']:.1f} s
+Analysis Methods:"""
+
+            # Linear fit results
+            if 'linear_fit' in results:
+                linear = results['linear_fit']
+                results_text += f"""
+
+Linear Fit Method:
+  Leak Rate: {linear.get('leak_rate', 0):.3e} mbar·L/s
+  R-squared: {linear.get('r_squared', 0):.4f}
+  Pressure Rise Rate: {linear.get('pressure_rise_rate', 0):.3e} mbar/s"""
+
+            # Exponential fit results  
+            if 'exponential_fit' in results:
+                exp = results['exponential_fit']
+                results_text += f"""
+
+Exponential Fit Method:
+  Leak Rate: {exp.get('leak_rate', 0):.3e} mbar·L/s
+  Time Constant: {exp.get('time_constant', 0):.1f} s
+  R-squared: {exp.get('r_squared', 0):.4f}"""
+
+            # Conductance-based results
+            if 'conductance_based' in results:
+                cond = results['conductance_based']
+                results_text += f"""
+
+Conductance-Based Method:
+  Leak Rate: {cond.get('leak_rate', 0):.3e} mbar·L/s
+  Effective Conductance: {cond.get('conductance', 0):.3e} L/s"""
+
+            # Overall assessment
+            if 'severity' in results:
+                results_text += f"""
+
+Overall Assessment:
+  Severity: {results['severity'].title()}
+  Primary Method: {results.get('primary_method', 'unknown')}
+  Confidence: {results.get('confidence', 'unknown')}"""
+
+            results_text += f"""
+
 System Volume: {volume} L
 
 The leak rate represents the rate of pressure 
 increase due to leaks in the vacuum system.
-
-A good fit (R² close to 1) indicates steady 
-leak rate. Poor fit may indicate multiple 
-leak sources or non-steady behavior."""
+Multiple calculation methods provide different
+perspectives on leak characteristics."""
 
             self.leak_rate_results.delete("1.0", "end")
             self.leak_rate_results.insert("1.0", results_text)
 
-            # Store results
+            # Store enhanced results
             self.analysis_results['leak_rate'] = {
-                'leak_rate': results['leak_rate'],
-                'r_squared': results['r_squared'],
+                'linear_fit': results.get('linear_fit', {}),
+                'exponential_fit': results.get('exponential_fit', {}),
+                'conductance_based': results.get('conductance_based', {}),
+                'severity': results.get('severity'),
+                'primary_method': results.get('primary_method'),
                 'volume': volume,
                 'series_name': series.name
             }
@@ -596,25 +701,46 @@ stability and measurement quality."""
             # Create plot
             self.create_spike_plot(x_data, y_data, spikes)
 
-            # Display results
+            # Display enhanced results
             if spikes:
-                spike_summary = "\n".join([
-                    f"Spike {i+1}: Start={s['start']}, Duration={s['duration']}, Max={s['max_pressure']:.2e}, Severity={s['severity']}"
-                    for i, s in enumerate(spikes[:10])  # Show first 10 spikes
-                ])
+                # Group spikes by severity
+                severity_counts = {}
+                for spike in spikes:
+                    severity = spike.get('severity', 'unknown')
+                    severity_counts[severity] = severity_counts.get(severity, 0) + 1
+                
+                severity_summary = "\n".join([f"{sev.title()}: {count}" for sev, count in severity_counts.items()])
+                
+                # Show detailed spike information
+                spike_details = []
+                for i, s in enumerate(spikes[:10]):  # Show first 10 spikes
+                    spike_info = f"Spike {i+1}: "
+                    spike_info += f"Start={s['start']}, Duration={s['duration']}, "
+                    spike_info += f"Max={s['max_pressure']:.2e}, "
+                    spike_info += f"Baseline={s.get('baseline_pressure', 0):.2e}, "
+                    spike_info += f"Ratio={s.get('pressure_ratio', 0):.1f}x, "
+                    spike_info += f"Severity={s.get('severity', 'unknown')}"
+                    spike_details.append(spike_info)
+                
+                spike_summary = "\n".join(spike_details)
                 
                 results_text = f"""Spike Detection Results:
 
 Threshold Factor: {threshold} σ
 Total Spikes Found: {len(spikes)}
 
+Severity Distribution:
+{severity_summary}
+
+Detailed Spike Information:
 {spike_summary}
 
 {"... (showing first 10 spikes)" if len(spikes) > 10 else ""}
 
 Spikes indicate sudden pressure increases
 that may be caused by outgassing events,
-leaks, or contamination."""
+leaks, or contamination. Severity is based
+on pressure ratio compared to baseline."""
             else:
                 results_text = f"""Spike Detection Results:
 
@@ -686,32 +812,53 @@ to detect smaller pressure variations."""
             # Create plot
             self.create_pump_down_plot(x_data, y_data, results)
 
-            # Display results
-            milestones_text = "\n".join([f"{level}: {time}" for level, time in results['milestones'].items()])
-            
+            # Display enhanced results
             results_text = f"""Pump Down Analysis Results:
 
-Initial Pressure: {results['initial_pressure']:.3e} mbar
-Final Pressure: {results['final_pressure']:.3e} mbar
+Initial Pressure: {results.get('initial_pressure', 0):.3e} mbar
+Final Pressure: {results.get('final_pressure', 0):.3e} mbar
+Ultimate Vacuum: {results.get('ultimate_vacuum', 'N/A')}
 
-Pressure Milestones:
-{milestones_text}
+Pressure Milestones:"""
 
-The pump down curve shows the effectiveness
-of the vacuum pumping system. Faster pump
-down indicates better pumping speed.
+            # Add milestones if available
+            milestones = results.get('milestones', {})
+            for level, time in milestones.items():
+                if isinstance(time, str):
+                    results_text += f"\n{level}: {time}"
+                else:
+                    results_text += f"\n{level}: {time:.2f}s"
 
-Milestones show time to reach standard
-vacuum levels."""
+            # Add enhanced features
+            if 'pump_rate_phases' in results:
+                phases = results['pump_rate_phases']
+                results_text += f"\n\nPump Rate Phases:"
+                for phase in phases:
+                    results_text += f"\n  {phase['pressure_range']}: {phase['avg_rate']:.3e} mbar/s"
+
+            if 'time_constant' in results:
+                results_text += f"\n\nTime Constant: {results['time_constant']:.2f}s"
+
+            if 'exponential_fit' in results:
+                fit = results['exponential_fit']
+                results_text += f"\nExponential Fit R²: {fit.get('r_squared', 0):.4f}"
+
+            if 'pump_efficiency' in results:
+                results_text += f"\nPump Efficiency: {results['pump_efficiency']}"
+
+            results_text += "\n\nThe pump down curve shows the effectiveness\nof the vacuum pumping system. Faster pump\ndown indicates better pumping speed.\n\nMilestones show time to reach standard\nvacuum levels."
 
             self.pump_results.delete("1.0", "end")
             self.pump_results.insert("1.0", results_text)
 
-            # Store results
+            # Store enhanced results
             self.analysis_results['pump_down'] = {
-                'initial_pressure': results['initial_pressure'],
-                'final_pressure': results['final_pressure'],
-                'milestones': results['milestones'],
+                'initial_pressure': results.get('initial_pressure', 0),
+                'final_pressure': results.get('final_pressure', 0),
+                'milestones': results.get('milestones', {}),
+                'time_constant': results.get('time_constant'),
+                'pump_efficiency': results.get('pump_efficiency'),
+                'exponential_fit': results.get('exponential_fit'),
                 'series_name': series.name
             }
 
@@ -828,6 +975,142 @@ rate calculated from pressure rise."""
 
         # Create export dialog or save directly
         messagebox.showinfo("Export", "Results export functionality would be implemented here")
+
+    # --- Quick annotation helpers ---
+    def _get_main_app(self):
+        return getattr(self, 'parent', None)
+
+    def _refresh_main_plot(self):
+        app = self._get_main_app()
+        if app and hasattr(app, 'create_plot'):
+            app.create_plot()
+
+    def add_base_pressure_annotation(self):
+        app = self._get_main_app()
+        if not app or not hasattr(app, 'annotation_manager'):
+            messagebox.showwarning("Warning", "Main plot/annotations not available")
+            return
+        series, x_data, y_data = self.get_series_data(self.base_pressure_series_var)
+        if series is None:
+            messagebox.showwarning("Warning", "Please select a series and analyze first")
+            return
+        # Use existing analysis result if available; otherwise compute quickly
+        if 'base_pressure' in self.analysis_results:
+            bp = self.analysis_results['base_pressure']['base_pressure']
+        else:
+            try:
+                bp, _, _ = VacuumAnalysisTools.calculate_base_pressure(y_data, window_minutes=self.window_var.get())
+            except Exception:
+                messagebox.showerror("Error", "Could not compute base pressure")
+                return
+        # Determine x-range from main plot if available
+        if getattr(app, 'plot_axes', None):
+            x_start, x_end = app.plot_axes.get_xlim()
+        else:
+            x_start, x_end = (float(x_data[0]), float(x_data[-1]))
+        app.annotation_manager.add_base_pressure_annotation(x_start, x_end, bp, series.name)
+        self._refresh_main_plot()
+
+    def add_leak_rate_annotation(self):
+        app = self._get_main_app()
+        if not app or not hasattr(app, 'annotation_manager'):
+            messagebox.showwarning("Warning", "Main plot/annotations not available")
+            return
+        if 'leak_rate' not in self.analysis_results:
+            self.analyze_leak_rate()
+            if 'leak_rate' not in self.analysis_results:
+                return
+        lr = self.analysis_results['leak_rate']['leak_rate']
+        series, x_data, y_data = self.get_series_data(self.leak_rate_series_var)
+        if getattr(app, 'plot_axes', None):
+            x_start, x_end = app.plot_axes.get_xlim()
+        else:
+            x_start, x_end = (float(x_data[0]), float(x_data[-1]))
+        
+        # Use color and label from controls
+        color = getattr(self, 'leak_color_var', None).get() if hasattr(self, 'leak_color_var') else 'blue'
+        base_label = getattr(self, 'leak_label_var', None).get() if hasattr(self, 'leak_label_var') else ''
+        label = base_label or f"Leak Rate: {lr:.2e}"
+        
+        app.annotation_manager.add_leak_annotation(x_start, x_end, lr, series.name, color=color, label=label)
+        self._refresh_main_plot()
+
+    def add_top_spike_annotation(self):
+        app = self._get_main_app()
+        if not app or not hasattr(app, 'annotation_manager'):
+            messagebox.showwarning("Warning", "Main plot/annotations not available")
+            return
+        series, x_data, y_data = self.get_series_data(self.spike_series_var)
+        if series is None:
+            messagebox.showwarning("Warning", "Please select a series")
+            return
+        threshold = self.threshold_var.get()
+        spikes = VacuumAnalysisTools.detect_pressure_spikes(y_data, threshold_factor=threshold)
+        if not spikes:
+            messagebox.showinfo("Info", "No spikes found at current threshold")
+            return
+        # Choose the spike with max_pressure
+        top = max(spikes, key=lambda s: s.get('max_pressure', 0))
+        idx = top['start']
+        x = float(x_data[idx])
+        y = float(top['max_pressure'])
+        color = getattr(self, 'spike_color_var', None).get() if hasattr(self, 'spike_color_var') else 'red'
+        base_label = getattr(self, 'spike_label_var', None).get() if hasattr(self, 'spike_label_var') else ''
+        label = base_label or f"Spike {y:.2e}"
+        app.annotation_manager.add_spike_annotation(x, y, magnitude=y, series_name=series.name, label=label, color=color)
+        self._refresh_main_plot()
+
+    def annotate_all_spikes(self):
+        app = self._get_main_app()
+        if not app or not hasattr(app, 'annotation_manager'):
+            messagebox.showwarning("Warning", "Main plot/annotations not available")
+            return
+        series, x_data, y_data = self.get_series_data(self.spike_series_var)
+        if series is None:
+            messagebox.showwarning("Warning", "Please select a series")
+            return
+        threshold = self.threshold_var.get()
+        spikes = VacuumAnalysisTools.detect_pressure_spikes(y_data, threshold_factor=threshold)
+        if not spikes:
+            messagebox.showinfo("Info", "No spikes found at current threshold")
+            return
+        color = getattr(self, 'spike_color_var', None).get() if hasattr(self, 'spike_color_var') else 'red'
+        base_label = getattr(self, 'spike_label_var', None).get() if hasattr(self, 'spike_label_var') else ''
+        for i, s in enumerate(spikes, start=1):
+            idx = s.get('start', s.get('index', 0))
+            x = float(x_data[idx])
+            y = float(s.get('max_pressure', y_data[idx]))
+            label = base_label or f"Spike {i}: {y:.2e}"
+            app.annotation_manager.add_spike_annotation(x, y, magnitude=y, series_name=series.name, label=label, color=color)
+        self._refresh_main_plot()
+
+    def add_pumpdown_annotation(self):
+        app = self._get_main_app()
+        if not app or not hasattr(app, 'annotation_manager'):
+            messagebox.showwarning("Warning", "Main plot/annotations not available")
+            return
+        series, x_data, y_data = self.get_series_data(self.pump_series_var)
+        if series is None:
+            messagebox.showwarning("Warning", "Please select a series")
+            return
+        try:
+            results = VacuumAnalysisTools.analyze_pump_down_curve(y_data, x_data)
+        except Exception as e:
+            messagebox.showerror("Error", f"Pumpdown analysis failed: {e}")
+            return
+        # Use entire series range
+        x_start = float(x_data[0])
+        x_end = float(x_data[-1])
+        p_initial = float(results.get('initial_pressure', y_data[0]))
+        p_final = float(results.get('final_pressure', y_data[-1]))
+        
+        # Use color and label from controls
+        color = getattr(self, 'pumpdown_color_var', None).get() if hasattr(self, 'pumpdown_color_var') else 'green'
+        base_label = getattr(self, 'pumpdown_label_var', None).get() if hasattr(self, 'pumpdown_label_var') else ''
+        label = base_label or f"Pumpdown {p_initial:.1e}→{p_final:.1e}"
+        
+        app.annotation_manager.add_pumpdown_annotation(x_start, x_end, p_initial, p_final=p_final, label=label, series_name=series.name, color=color)
+        self._refresh_main_plot()
 
     def close_dialog(self):
         """Close the dialog"""

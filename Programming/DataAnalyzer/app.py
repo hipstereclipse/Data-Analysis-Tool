@@ -576,16 +576,37 @@ class ExcelDataPlotter(ctk.CTk):
         self.series_count_label = ctk.CTkLabel(mgmt_header, text="(0 total)", font=("", 10))
         self.series_count_label.pack(side="left", padx=(5, 0))
 
-        # Management buttons
+        # Management buttons with enhanced functionality
         mgmt_buttons = ctk.CTkFrame(mgmt_header)
         mgmt_buttons.pack(side="right")
         
+        # Visibility controls
         ctk.CTkButton(mgmt_buttons, text="👁️", width=30, height=25,
                       command=self.show_all_series).pack(side="left", padx=1)
         ctk.CTkButton(mgmt_buttons, text="🚫", width=30, height=25,
                       command=self.hide_all_series).pack(side="left", padx=1)
+        
+        # Plot control
         ctk.CTkButton(mgmt_buttons, text="🔄", width=30, height=25,
                       command=self.refresh_plot).pack(side="left", padx=1)
+        
+        # Bulk operations
+        ctk.CTkButton(mgmt_buttons, text="🗑️", width=30, height=25,
+                      fg_color=("#ff4444", "#cc3333"),
+                      hover_color=("#ff6666", "#ff4444"),
+                      command=self.delete_all_series).pack(side="left", padx=1)
+        
+        # Advanced dropdown menu
+        self.mgmt_menu_var = ctk.StringVar(value="⚙️")
+        mgmt_menu = ctk.CTkComboBox(
+            mgmt_buttons,
+            variable=self.mgmt_menu_var,
+            values=["⚙️", "📤 Export All", "🎨 Randomize Colors", "📋 Duplicate All", "🔢 Rename Sequential"],
+            width=35,
+            height=25,
+            command=self._handle_bulk_operation
+        )
+        mgmt_menu.pack(side="left", padx=1)
 
         # Series list
         self.series_scroll = ctk.CTkScrollableFrame(management_frame)
@@ -1312,17 +1333,14 @@ class ExcelDataPlotter(ctk.CTk):
                           np.isnan(pd.to_numeric(y_data, errors='coerce')))
             
             if valid_mask.any():
-                if hasattr(x_data, '__getitem__') and hasattr(valid_mask, '__getitem__'):
-                    x_clean = x_data[valid_mask]
-                    y_clean = y_data[valid_mask]
-                else:
-                    # Handle cases where indexing doesn't work directly
-                    x_clean = [x for i, x in enumerate(x_data) if (valid_mask.iloc[i] if hasattr(valid_mask, 'iloc') else valid_mask[i])]
-                    y_clean = y_data[valid_mask]
-                
                 # Convert to numpy arrays for consistent indexing
-                x_clean = np.array(x_clean)
-                y_clean = np.array(y_clean)
+                x_array = np.array(x_data)
+                y_array = np.array(y_data)
+                valid_array = np.array(valid_mask)
+                
+                # Apply mask to get clean data
+                x_clean = x_array[valid_array]
+                y_clean = y_array[valid_array]
                 
                 # Plot the data with themed colors
                 line_color = self.theme_manager.get_color("accent")
@@ -1586,71 +1604,249 @@ class ExcelDataPlotter(ctk.CTk):
         self.status_bar.set_status(f"Added series: {series_name}", "success")
 
     def add_series_card(self, series):
-        """Add a compact series card to the series panel"""
-        card = ctk.CTkFrame(self.series_scroll)
-        card.pack(fill="x", pady=2, padx=3)
+        """Add an enhanced series card to the series panel with improved UI"""
+        card = ctk.CTkFrame(self.series_scroll, corner_radius=8)
+        card.pack(fill="x", pady=3, padx=4)
 
-        # Single compact row layout
-        row_frame = ctk.CTkFrame(card)
-        row_frame.pack(fill="x", padx=3, pady=3)
+        # Single compact row layout with better spacing
+        row_frame = ctk.CTkFrame(card, corner_radius=6)
+        row_frame.pack(fill="x", padx=4, pady=4)
 
-        # Left side: Visibility + Color indicator + Name
-        left_frame = ctk.CTkFrame(row_frame)
+        # Left side: Visibility + Clickable Color indicator + Name
+        left_frame = ctk.CTkFrame(row_frame, fg_color="transparent")
         left_frame.pack(side="left", fill="x", expand=True)
 
-        # Visibility checkbox (smaller)
+        # Visibility checkbox with better styling
         visibility_var = ctk.BooleanVar(value=getattr(series, 'visible', True))
         visibility_check = ctk.CTkCheckBox(
             left_frame, 
             text="", 
             variable=visibility_var,
-            width=16,
-            height=16,
+            width=18,
+            height=18,
             command=lambda: self.toggle_series_visibility(series, visibility_var.get())
         )
-        visibility_check.pack(side="left", padx=(3, 6))
+        visibility_check.pack(side="left", padx=(4, 8))
 
-        # Color indicator (smaller)
-        color_frame = ctk.CTkFrame(left_frame, width=12, height=12, fg_color=series.color, corner_radius=2)
-        color_frame.pack(side="left", padx=(0, 6))
-        color_frame.pack_propagate(False)
+        # Enhanced clickable color indicator with tooltip-like behavior
+        color_container = ctk.CTkFrame(left_frame, fg_color="transparent")
+        color_container.pack(side="left", padx=(0, 8))
+        
+        color_button = ctk.CTkButton(
+            color_container, 
+            text="", 
+            width=20, 
+            height=20, 
+            fg_color=series.color,
+            corner_radius=4,
+            hover_color=self._adjust_color_brightness(series.color, 0.8),
+            command=lambda s=series: self.quick_change_series_color(s)
+        )
+        color_button.pack()
+        
+        # Add tooltip for color button
+        self._add_tooltip(color_button, "Click to change color")
         
         # Store reference for color updates
         if not hasattr(self, 'series_color_frames'):
             self.series_color_frames = {}
-        self.series_color_frames[series.id] = color_frame
+        self.series_color_frames[series.id] = color_button
 
-        # Series name and info (compact)
-        info_frame = ctk.CTkFrame(left_frame)
-        info_frame.pack(side="left", fill="x", expand=True)
+        # Series name and info (enhanced styling)
+        info_frame = ctk.CTkFrame(left_frame, fg_color="transparent")
+        info_frame.pack(side="left", fill="x", expand=True, padx=(0, 5))
         
-        # Name on top line
-        series_title = ctk.CTkLabel(info_frame, text=series.name, font=("", 11, "bold"))
-        series_title.pack(anchor="w")
+        # Name on top line with better typography
+        series_title = ctk.CTkLabel(
+            info_frame, 
+            text=series.name, 
+            font=ctk.CTkFont(size=12, weight="bold"),
+            anchor="w"
+        )
+        series_title.pack(anchor="w", fill="x")
         
-        # Compact data info on bottom line
+        # Enhanced data info on bottom line
         file_info = self.loaded_files.get(series.file_id)
-        file_name = file_info.filename[:20] + "..." if file_info and len(file_info.filename) > 20 else (file_info.filename if file_info else "Unknown")
+        file_name = file_info.filename[:18] + "..." if file_info and len(file_info.filename) > 18 else (file_info.filename if file_info else "Unknown")
         data_points = (series.end_index or len(file_info.df)) - (series.start_index or 0) if file_info else 0
         
-        info_text = f"{file_name} • {series.x_column}→{series.y_column} • {data_points:,}pts"
-        info_label = ctk.CTkLabel(info_frame, text=info_text, font=("", 9), text_color=("gray60", "gray50"))
-        info_label.pack(anchor="w")
+        # More compact and informative display
+        info_text = f"📁 {file_name} • {series.x_column}→{series.y_column} • {data_points:,}pts"
+        info_label = ctk.CTkLabel(
+            info_frame, 
+            text=info_text, 
+            font=ctk.CTkFont(size=9), 
+            text_color=("gray60", "gray50"),
+            anchor="w"
+        )
+        info_label.pack(anchor="w", fill="x")
 
-        # Right side: Action buttons (compact)
-        btn_frame = ctk.CTkFrame(row_frame)
-        btn_frame.pack(side="right", padx=3)
+        # Right side: Clear Delete and Configure buttons
+        btn_frame = ctk.CTkFrame(row_frame, fg_color="transparent")
+        btn_frame.pack(side="right", padx=4)
 
-        # Compact buttons
-        ctk.CTkButton(btn_frame, text="📝", width=25, height=22, 
-                      command=lambda s=series: self.edit_series(s)).pack(side="left", padx=1)
-        ctk.CTkButton(btn_frame, text="📋", width=25, height=22,
-                      command=lambda s=series: self.duplicate_series_real(s)).pack(side="left", padx=1)
-        ctk.CTkButton(btn_frame, text="🗑️", width=25, height=22, fg_color=ColorPalette.ERROR,
-                      command=lambda s=series: self.remove_series(s)).pack(side="left", padx=1)
+        # Configure button - primary action
+        configure_btn = ctk.CTkButton(
+            btn_frame, 
+            text="Configure", 
+            width=70, 
+            height=26,
+            corner_radius=6,
+            font=ctk.CTkFont(size=10, weight="bold"),
+            command=lambda s=series: self.edit_series(s)
+        )
+        configure_btn.pack(side="left", padx=2)
+        self._add_tooltip(configure_btn, "Configure series settings")
+
+        # Delete button - secondary action with warning styling
+        delete_btn = ctk.CTkButton(
+            btn_frame, 
+            text="Delete", 
+            width=60, 
+            height=26,
+            corner_radius=6,
+            font=ctk.CTkFont(size=10, weight="bold"),
+            fg_color=("#ff4444", "#cc3333"),
+            hover_color=("#ff6666", "#ff4444"),
+            command=lambda s=series: self.confirm_remove_series(s)
+        )
+        delete_btn.pack(side="left", padx=2)
+        self._add_tooltip(delete_btn, "Delete this series")
 
         # Store the card reference for future updates
         self.series_cards[series.id] = card
+
+        # Store widget references for updates
+        if not hasattr(self, 'series_widgets'):
+            self.series_widgets = {}
+        self.series_widgets[series.id] = {
+            'card': card,
+            'visibility_var': visibility_var,
+            'visibility_check': visibility_check,
+            'color_button': color_button,
+            'title_label': series_title,
+            'info_label': info_label
+        }
+
+    def _adjust_color_brightness(self, hex_color, factor):
+        """Adjust the brightness of a hex color"""
+        try:
+            # Remove the '#' if present
+            hex_color = hex_color.lstrip('#')
+            
+            # Convert hex to RGB
+            rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+            
+            # Adjust brightness
+            new_rgb = tuple(int(min(255, max(0, c * factor))) for c in rgb)
+            
+            # Convert back to hex
+            return f"#{new_rgb[0]:02x}{new_rgb[1]:02x}{new_rgb[2]:02x}"
+        except:
+            return hex_color  # Return original if conversion fails
+
+    def _add_tooltip(self, widget, text):
+        """Add a simple tooltip to a widget"""
+        def on_enter(event):
+            tooltip = ctk.CTkToplevel()
+            tooltip.wm_overrideredirect(True)
+            tooltip.wm_geometry(f"+{event.x_root + 10}+{event.y_root + 10}")
+            
+            label = ctk.CTkLabel(
+                tooltip, 
+                text=text, 
+                font=ctk.CTkFont(size=10),
+                corner_radius=4
+            )
+            label.pack(padx=4, pady=2)
+            
+            widget.tooltip = tooltip
+            
+        def on_leave(event):
+            if hasattr(widget, 'tooltip'):
+                widget.tooltip.destroy()
+                delattr(widget, 'tooltip')
+                
+        widget.bind("<Enter>", on_enter)
+        widget.bind("<Leave>", on_leave)
+
+    def confirm_remove_series(self, series):
+        """Show confirmation dialog before removing series"""
+        try:
+            # Create custom confirmation dialog
+            dialog = ctk.CTkToplevel(self)
+            dialog.title("Confirm Delete Series")
+            dialog.geometry("350x180")
+            dialog.transient(self)
+            dialog.grab_set()
+            
+            # Center the dialog
+            dialog.update_idletasks()
+            x = (dialog.winfo_screenwidth() // 2) - (350 // 2)
+            y = (dialog.winfo_screenheight() // 2) - (180 // 2)
+            dialog.geometry(f"350x180+{x}+{y}")
+            
+            # Content frame
+            content_frame = ctk.CTkFrame(dialog)
+            content_frame.pack(fill="both", expand=True, padx=20, pady=20)
+            
+            # Warning text
+            ctk.CTkLabel(
+                content_frame,
+                text="⚠️ Confirm Delete",
+                font=ctk.CTkFont(size=14, weight="bold"),
+                text_color=("#ff4444", "#ff6666")
+            ).pack(pady=(10, 5))
+            
+            ctk.CTkLabel(
+                content_frame,
+                text=f"Delete '{series.name}'?\n\nThis action cannot be undone.",
+                font=ctk.CTkFont(size=11),
+                justify="center"
+            ).pack(pady=10)
+            
+            # Button frame
+            btn_frame = ctk.CTkFrame(content_frame, fg_color="transparent")
+            btn_frame.pack(pady=15)
+            
+            result = {'confirmed': False}
+            
+            def confirm_delete():
+                result['confirmed'] = True
+                dialog.destroy()
+                
+            def cancel_delete():
+                result['confirmed'] = False
+                dialog.destroy()
+            
+            # Buttons
+            ctk.CTkButton(
+                btn_frame,
+                text="Cancel",
+                command=cancel_delete,
+                width=80
+            ).pack(side="left", padx=10)
+            
+            ctk.CTkButton(
+                btn_frame,
+                text="Delete",
+                command=confirm_delete,
+                fg_color=("#ff4444", "#cc3333"),
+                hover_color=("#ff6666", "#ff4444"),
+                width=80
+            ).pack(side="left", padx=10)
+            
+            # Wait for dialog to close
+            self.wait_window(dialog)
+            
+            # If confirmed, delete the series
+            if result['confirmed']:
+                self.remove_series(series)
+                
+        except Exception as e:
+            logger.error(f"Error in confirmation dialog: {e}")
+            # Fallback to direct deletion if dialog fails
+            self.remove_series(series)
 
     def toggle_series_visibility(self, series, is_visible):
         """Toggle the visibility of a series and auto-refresh plot"""
@@ -1929,6 +2125,239 @@ class ExcelDataPlotter(ctk.CTk):
             logger.error(f"Error hiding all series: {e}")
             self.status_bar.set_status(f"Error hiding all series: {str(e)}", "error")
 
+    def delete_all_series(self):
+        """Delete all series with confirmation"""
+        if not self.all_series:
+            self.status_bar.set_status("No series to delete", "info")
+            return
+            
+        try:
+            # Create custom confirmation dialog
+            dialog = ctk.CTkToplevel(self)
+            dialog.title("Confirm Delete All Series")
+            dialog.geometry("400x200")
+            dialog.transient(self)
+            dialog.grab_set()
+            
+            # Center the dialog
+            dialog.update_idletasks()
+            x = (dialog.winfo_screenwidth() // 2) - (400 // 2)
+            y = (dialog.winfo_screenheight() // 2) - (200 // 2)
+            dialog.geometry(f"400x200+{x}+{y}")
+            
+            # Warning content
+            warning_frame = ctk.CTkFrame(dialog)
+            warning_frame.pack(fill="both", expand=True, padx=20, pady=20)
+            
+            # Warning icon and text
+            ctk.CTkLabel(
+                warning_frame,
+                text="⚠️ WARNING",
+                font=ctk.CTkFont(size=16, weight="bold"),
+                text_color=("#ff4444", "#ff6666")
+            ).pack(pady=(10, 5))
+            
+            ctk.CTkLabel(
+                warning_frame,
+                text=f"This will permanently delete all {len(self.all_series)} series.\n\nThis action cannot be undone.",
+                font=ctk.CTkFont(size=12),
+                justify="center"
+            ).pack(pady=10)
+            
+            # Button frame
+            btn_frame = ctk.CTkFrame(warning_frame, fg_color="transparent")
+            btn_frame.pack(pady=20)
+            
+            result = {'confirmed': False}
+            
+            def confirm_delete():
+                result['confirmed'] = True
+                dialog.destroy()
+                
+            def cancel_delete():
+                result['confirmed'] = False
+                dialog.destroy()
+            
+            # Buttons
+            ctk.CTkButton(
+                btn_frame,
+                text="Cancel",
+                command=cancel_delete,
+                width=100
+            ).pack(side="left", padx=10)
+            
+            ctk.CTkButton(
+                btn_frame,
+                text="Delete All",
+                command=confirm_delete,
+                fg_color=("#ff4444", "#cc3333"),
+                hover_color=("#ff6666", "#ff4444"),
+                width=100
+            ).pack(side="left", padx=10)
+            
+            # Wait for dialog to close
+            self.wait_window(dialog)
+            
+            # If confirmed, delete all series
+            if result['confirmed']:
+                count = len(self.all_series)
+                
+                # Clear all series
+                for series_id in list(self.all_series.keys()):
+                    if series_id in self.series_cards:
+                        self.series_cards[series_id].destroy()
+                        del self.series_cards[series_id]
+                    
+                    if hasattr(self, 'series_color_frames') and series_id in self.series_color_frames:
+                        del self.series_color_frames[series_id]
+                        
+                    if hasattr(self, 'series_widgets') and series_id in self.series_widgets:
+                        del self.series_widgets[series_id]
+                
+                # Clear data structures
+                self.all_series.clear()
+                self.series_cards.clear()
+                if hasattr(self, 'series_color_frames'):
+                    self.series_color_frames.clear()
+                if hasattr(self, 'series_widgets'):
+                    self.series_widgets.clear()
+                
+                # Clear plot
+                if hasattr(self, 'figure') and self.figure:
+                    self.clear_plot_area()
+                
+                self.update_counts()
+                self.status_bar.set_status(f"Deleted {count} series", "success")
+            
+        except Exception as e:
+            logger.error(f"Error deleting all series: {e}")
+            self.status_bar.set_status(f"Error deleting series: {str(e)}", "error")
+
+    def _handle_bulk_operation(self, operation):
+        """Handle bulk operations from the dropdown menu"""
+        try:
+            if operation == "⚙️":
+                return  # Default state, do nothing
+                
+            elif operation == "📤 Export All":
+                self._export_all_series()
+            elif operation == "🎨 Randomize Colors":
+                self._randomize_all_colors()
+            elif operation == "📋 Duplicate All":
+                self._duplicate_all_series()
+            elif operation == "🔢 Rename Sequential":
+                self._rename_series_sequential()
+            
+            # Reset dropdown to default
+            self.mgmt_menu_var.set("⚙️")
+            
+        except Exception as e:
+            logger.error(f"Error handling bulk operation: {e}")
+            self.status_bar.set_status(f"Error: {str(e)}", "error")
+            self.mgmt_menu_var.set("⚙️")
+
+    def _export_all_series(self):
+        """Export all series data to files"""
+        if not self.all_series:
+            self.status_bar.set_status("No series to export", "warning")
+            return
+            
+        from tkinter import filedialog
+        folder = filedialog.askdirectory(title="Select Export Folder")
+        
+        if folder:
+            exported_count = 0
+            for series in self.all_series.values():
+                try:
+                    file_data = self.loaded_files.get(series.file_id)
+                    if file_data:
+                        x_data, y_data = series.get_data(file_data)
+                        export_df = pd.DataFrame({
+                            series.x_column: x_data,
+                            series.y_column: y_data
+                        })
+                        
+                        # Safe filename
+                        safe_name = "".join(c for c in series.name if c.isalnum() or c in (' ', '-', '_')).rstrip()
+                        file_path = os.path.join(folder, f"{safe_name}.csv")
+                        
+                        export_df.to_csv(file_path, index=False)
+                        exported_count += 1
+                        
+                except Exception as e:
+                    logger.warning(f"Failed to export series {series.name}: {e}")
+            
+            self.status_bar.set_status(f"Exported {exported_count} series to {folder}", "success")
+
+    def _randomize_all_colors(self):
+        """Randomize colors for all series"""
+        if not self.all_series:
+            self.status_bar.set_status("No series to recolor", "warning")
+            return
+            
+        import random
+        
+        # Generate random colors
+        colors = generate_color_sequence(len(self.all_series))
+        random.shuffle(colors)
+        
+        for i, series in enumerate(self.all_series.values()):
+            series.color = colors[i % len(colors)]
+            self.all_series[series.id] = series
+            self.update_series_card_color(series)
+        
+        # Refresh plot if exists
+        if hasattr(self, 'figure') and self.figure:
+            self.create_plot()
+            
+        self.status_bar.set_status(f"Randomized colors for {len(self.all_series)} series", "success")
+
+    def _duplicate_all_series(self):
+        """Duplicate all existing series"""
+        if not self.all_series:
+            self.status_bar.set_status("No series to duplicate", "warning")
+            return
+            
+        original_series = list(self.all_series.values())
+        duplicated_count = 0
+        
+        for series in original_series:
+            try:
+                self.duplicate_series_real(series)
+                duplicated_count += 1
+            except Exception as e:
+                logger.warning(f"Failed to duplicate series {series.name}: {e}")
+        
+        self.status_bar.set_status(f"Duplicated {duplicated_count} series", "success")
+
+    def _rename_series_sequential(self):
+        """Rename all series with sequential numbering"""
+        if not self.all_series:
+            self.status_bar.set_status("No series to rename", "warning")
+            return
+            
+        # Get base name from user
+        dialog = ctk.CTkInputDialog(
+            text="Enter base name for sequential numbering:",
+            title="Rename Series"
+        )
+        
+        base_name = dialog.get_input()
+        if not base_name:
+            return
+            
+        for i, series in enumerate(self.all_series.values(), 1):
+            series.name = f"{base_name} {i}"
+            self.all_series[series.id] = series
+            
+            # Update UI if widget exists
+            if hasattr(self, 'series_widgets') and series.id in self.series_widgets:
+                widgets = self.series_widgets[series.id]
+                if 'title_label' in widgets and widgets['title_label'].winfo_exists():
+                    widgets['title_label'].configure(text=series.name)
+        
+        self.status_bar.set_status(f"Renamed {len(self.all_series)} series", "success")
+
     def get_series_summary(self):
         """Get a summary of all series for display"""
         try:
@@ -2033,22 +2462,27 @@ class ExcelDataPlotter(ctk.CTk):
     def update_series_card_color(self, series):
         """Update the color preview in an existing series card"""
         try:
-            # Use stored reference to directly update color frame
+            # Use stored reference to directly update color button
             if (hasattr(self, 'series_color_frames') and 
                 series.id in self.series_color_frames):
-                color_frame = self.series_color_frames[series.id]
-                if color_frame.winfo_exists():
-                    color_frame.configure(fg_color=series.color)
-                    logger.info(f"Updated color frame for series {series.name} to {series.color}")
+                color_button = self.series_color_frames[series.id]
+                if color_button.winfo_exists():
+                    color_button.configure(
+                        fg_color=series.color,
+                        hover_color=self._adjust_color_brightness(series.color, 0.8)
+                    )
+                    logger.info(f"Updated color button for series {series.name} to {series.color}")
                     return
                     
             # Fallback: recreate the card if direct update fails
-            logger.warning(f"Color frame reference not found for series {series.id}, recreating card")
+            logger.warning(f"Color button reference not found for series {series.id}, recreating card")
             if series.id in self.series_cards:
                 self.series_cards[series.id].destroy()
                 del self.series_cards[series.id]
                 if hasattr(self, 'series_color_frames') and series.id in self.series_color_frames:
                     del self.series_color_frames[series.id]
+                if hasattr(self, 'series_widgets') and series.id in self.series_widgets:
+                    del self.series_widgets[series.id]
             self.add_series_card(series)
             
         except Exception as e:

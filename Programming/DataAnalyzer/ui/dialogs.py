@@ -609,18 +609,42 @@ class SeriesConfigDialog:
             trend_color = self.trend_color_var.get() or self.color_var.get()
 
             if trend_type == "linear":
-                # Linear regression
-                z = np.polyfit(x_vals, y_vals, 1)
-                p = np.poly1d(z)
-                self.preview_ax.plot(x_data, p(x_vals), '--', color=trend_color, alpha=0.7,
-                                     label=f'Linear: y={z[0]:.2e}x+{z[1]:.2f}')
+                # Linear regression with error handling
+                try:
+                    # Check for valid data
+                    valid_mask = np.isfinite(x_vals) & np.isfinite(y_vals)
+                    if np.sum(valid_mask) > 1:
+                        x_clean = x_vals[valid_mask]
+                        y_clean = y_vals[valid_mask]
+                        
+                        # Only fit if we have enough data and variation
+                        if len(x_clean) > 1 and np.std(x_clean) > 1e-10:
+                            z = np.polyfit(x_clean, y_clean, 1)
+                            p = np.poly1d(z)
+                            self.preview_ax.plot(x_data, p(x_vals), '--', color=trend_color, alpha=0.7,
+                                                 label=f'Linear: y={z[0]:.2e}x+{z[1]:.2f}')
+                except (np.linalg.LinAlgError, np.RankWarning, ValueError) as e:
+                    print(f"Linear trend computation failed: {e}")
+                    pass
 
             elif trend_type == "polynomial":
-                # Polynomial fit (degree 2)
-                z = np.polyfit(x_vals, y_vals, 2)
-                p = np.poly1d(z)
-                self.preview_ax.plot(x_data, p(x_vals), '--', color=trend_color, alpha=0.7,
-                                     label='Polynomial (2nd degree)')
+                # Polynomial fit (degree 2) with error handling
+                try:
+                    # Check for valid data
+                    valid_mask = np.isfinite(x_vals) & np.isfinite(y_vals)
+                    if np.sum(valid_mask) > 2:  # Need at least 3 points for degree 2
+                        x_clean = x_vals[valid_mask]
+                        y_clean = y_vals[valid_mask]
+                        
+                        # Only fit if we have enough data and variation
+                        if len(x_clean) > 2 and np.std(x_clean) > 1e-10:
+                            z = np.polyfit(x_clean, y_clean, 2)
+                            p = np.poly1d(z)
+                            self.preview_ax.plot(x_data, p(x_vals), '--', color=trend_color, alpha=0.7,
+                                                 label='Polynomial (2nd degree)')
+                except (np.linalg.LinAlgError, np.RankWarning, ValueError) as e:
+                    print(f"Polynomial trend computation failed: {e}")
+                    pass
 
             elif trend_type == "moving_average":
                 # Moving average
@@ -1543,6 +1567,9 @@ class StatisticalAnalysisDialog:
         self.dialog.transient(parent)
         self.dialog.grab_set()
 
+        # Add root property for compatibility
+        self.root = self.dialog
+
         # Initialize theme manager
         from ui.theme_manager import theme_manager
         self.theme_manager = theme_manager
@@ -2001,6 +2028,64 @@ class StatisticalAnalysisDialog:
         )
         self.align_desc.pack(anchor="w", padx=10, pady=(0, 8))
         
+        # Manual offset controls (initially hidden)
+        self.manual_offset_frame = ctk.CTkFrame(align_frame, corner_radius=4)
+        # Don't pack initially - will be shown when "Custom Offset" is selected
+        
+        ctk.CTkLabel(
+            self.manual_offset_frame,
+            text="Manual Time Offsets",
+            font=ctk.CTkFont(weight="bold", size=11),
+            text_color=("#1E40AF", "#3B82F6")
+        ).pack(pady=(8, 5))
+        
+        # Primary series offset
+        primary_offset_frame = ctk.CTkFrame(self.manual_offset_frame, fg_color="transparent")
+        primary_offset_frame.pack(fill="x", padx=8, pady=2)
+        
+        ctk.CTkLabel(
+            primary_offset_frame,
+            text="Primary Series Offset:",
+            font=ctk.CTkFont(size=10)
+        ).pack(side="left")
+        
+        self.primary_offset_var = tk.DoubleVar(value=0.0)
+        primary_offset_entry = ctk.CTkEntry(
+            primary_offset_frame,
+            textvariable=self.primary_offset_var,
+            width=80,
+            height=25
+        )
+        primary_offset_entry.pack(side="right")
+        
+        # Secondary series offset
+        secondary_offset_frame = ctk.CTkFrame(self.manual_offset_frame, fg_color="transparent")
+        secondary_offset_frame.pack(fill="x", padx=8, pady=2)
+        
+        ctk.CTkLabel(
+            secondary_offset_frame,
+            text="Secondary Series Offset:",
+            font=ctk.CTkFont(size=10)
+        ).pack(side="left")
+        
+        self.secondary_offset_var = tk.DoubleVar(value=0.0)
+        secondary_offset_entry = ctk.CTkEntry(
+            secondary_offset_frame,
+            textvariable=self.secondary_offset_var,
+            width=80,
+            height=25
+        )
+        secondary_offset_entry.pack(side="right")
+        
+        # Offset units info
+        offset_info = ctk.CTkLabel(
+            self.manual_offset_frame,
+            text="⏱️ Offsets in time units (e.g., seconds, minutes)",
+            font=ctk.CTkFont(size=9),
+            text_color=("gray60", "gray40")
+        )
+        offset_info.pack(pady=(2, 8))
+        
         # Advanced options
         advanced_frame = ctk.CTkFrame(config_frame, corner_radius=6)
         advanced_frame.pack(fill="x", padx=15, pady=(0, 15))
@@ -2043,6 +2128,16 @@ class StatisticalAnalysisDialog:
             number_of_steps=19
         )
         confidence_slider.pack(pady=(5, 5))
+        
+        # Confidence description
+        confidence_desc = ctk.CTkLabel(
+            confidence_frame,
+            text="🔍 Controls statistical confidence intervals and uncertainty bounds in analysis results",
+            font=ctk.CTkFont(size=9),
+            text_color=("gray60", "gray40"),
+            wraplength=int(dialog_width * 0.32)
+        )
+        confidence_desc.pack(anchor="w", pady=(0, 5))
         
         # Smart toggles
         toggles_frame = ctk.CTkFrame(advanced_frame, fg_color="transparent")
@@ -2269,14 +2364,34 @@ class StatisticalAnalysisDialog:
             # Get file data for preview
             file_data = self.loaded_files.get(series_config.file_id)
             if file_data:
-                x_data, y_data = series_config.get_data(file_data)
-                
-                # Generate smart info display
-                info_text = f"📈 {len(y_data):,} points | "
-                info_text += f"Range: {y_data.min():.2e} to {y_data.max():.2e} | "
-                info_text += f"File: {file_data.filename}"
-                
-                self.primary_info_label.configure(text=info_text)
+                try:
+                    x_data, y_data = series_config.get_data(file_data)
+                    
+                    # Validate data before processing
+                    if len(y_data) == 0:
+                        self.primary_info_label.configure(text="⚠️ No valid data points in selected series")
+                        return
+                    
+                    # Generate smart info display
+                    info_text = f"📈 {len(y_data):,} points | "
+                    
+                    # Only calculate min/max if we have data
+                    try:
+                        y_min = y_data.min()
+                        y_max = y_data.max()
+                        if not (np.isnan(y_min) or np.isnan(y_max)):
+                            info_text += f"Range: {y_min:.2e} to {y_max:.2e} | "
+                        else:
+                            info_text += "Range: No valid numerical data | "
+                    except (ValueError, TypeError):
+                        info_text += "Range: Unable to calculate | "
+                    
+                    info_text += f"File: {file_data.filename}"
+                    
+                    self.primary_info_label.configure(text=info_text)
+                except Exception as e:
+                    self.primary_info_label.configure(text=f"⚠️ Error processing series data: {str(e)}")
+                    return
                 
                 # Update secondary series options (exclude selected primary)
                 other_series = [config.name for config in self.series_configs.values() 
@@ -2304,14 +2419,34 @@ class StatisticalAnalysisDialog:
             # Get file data for preview
             file_data = self.loaded_files.get(series_config.file_id)
             if file_data:
-                x_data, y_data = series_config.get_data(file_data)
-                
-                # Generate smart info display
-                info_text = f"📈 {len(y_data):,} points | "
-                info_text += f"Range: {y_data.min():.2e} to {y_data.max():.2e} | "
-                info_text += f"File: {file_data.filename}"
-                
-                self.secondary_info_label.configure(text=info_text)
+                try:
+                    x_data, y_data = series_config.get_data(file_data)
+                    
+                    # Validate data before processing
+                    if len(y_data) == 0:
+                        self.secondary_info_label.configure(text="⚠️ No valid data points in selected series")
+                        return
+                    
+                    # Generate smart info display
+                    info_text = f"📈 {len(y_data):,} points | "
+                    
+                    # Only calculate min/max if we have data
+                    try:
+                        y_min = y_data.min()
+                        y_max = y_data.max()
+                        if not (np.isnan(y_min) or np.isnan(y_max)):
+                            info_text += f"Range: {y_min:.2e} to {y_max:.2e} | "
+                        else:
+                            info_text += "Range: No valid numerical data | "
+                    except (ValueError, TypeError):
+                        info_text += "Range: Unable to calculate | "
+                    
+                    info_text += f"File: {file_data.filename}"
+                    
+                    self.secondary_info_label.configure(text=info_text)
+                except Exception as e:
+                    self.secondary_info_label.configure(text=f"⚠️ Error processing series data: {str(e)}")
+                    return
                 
                 # Update primary series options (exclude selected secondary)
                 other_series = [config.name for config in self.series_configs.values() 
@@ -2356,6 +2491,13 @@ class StatisticalAnalysisDialog:
         
         desc = descriptions.get(selected_alignment, "Time series alignment")
         self.align_desc.configure(text=desc)
+        
+        # Show/hide manual offset controls based on selection
+        if hasattr(self, 'manual_offset_frame'):
+            if selected_alignment == "Custom Offset":
+                self.manual_offset_frame.pack(fill="x", padx=10, pady=(5, 8))
+            else:
+                self.manual_offset_frame.pack_forget()
     
     def _update_confidence_label(self, value):
         """Update confidence level label"""
@@ -2363,27 +2505,11 @@ class StatisticalAnalysisDialog:
     
     def _on_viz_type_change(self, selected_type):
         """Handle visualization type change from the dropdown under the plot"""
-        # Update the main comparison type to match visualization selection
-        if hasattr(self, 'comp_type_var'):
-            type_mapping = {
-                "Smart Overlay": "Smart Overlay",
-                "Side-by-Side Comparison": "Side-by-Side", 
-                "Difference Plot": "Difference Analysis",
-                "Correlation Analysis": "Correlation Plot",
-                "Statistical Distribution": "Statistical Summary",
-                "Trend Comparison": "Performance Comparison",
-                "Scatter Matrix": "Correlation Plot",
-                "Box Plot Comparison": "Statistical Summary",
-                "Histogram Overlay": "Smart Overlay",
-                "Time Series Alignment": "Smart Overlay"
-            }
-            mapped_type = type_mapping.get(selected_type, "Smart Overlay")
-            self.comp_type_var.set(mapped_type)
-            
         # Auto-update visualization if data is available
         if hasattr(self, 'comp_primary_var') and self.comp_primary_var.get() and \
            hasattr(self, 'comp_secondary_var') and self.comp_secondary_var.get():
-            self._update_visualization()
+            # Update visualization immediately when type changes
+            self.root.after(100, self._update_visualization)  # Small delay to ensure UI updates
     
     def _update_visualization(self):
         """Update the visualization based on current settings"""
@@ -2391,14 +2517,112 @@ class StatisticalAnalysisDialog:
            not hasattr(self, 'comp_secondary_var') or not self.comp_secondary_var.get():
             return
             
-        # Trigger a comparison update with current visualization settings
+        # Update the status
+        if hasattr(self, 'status_label'):
+            self.status_label.configure(text="🔄 Updating visualization...")
+            
         try:
-            # Call the existing quick compare method which handles visualization
-            self._quick_compare()
+            # Get the selected visualization type
+            viz_type = self.viz_type_var.get() if hasattr(self, 'viz_type_var') else "Smart Overlay"
+            
+            # Map visualization type to comparison type
+            type_mapping = {
+                "Smart Overlay": "Overlay",
+                "Side-by-Side Comparison": "Side-by-Side", 
+                "Difference Plot": "Difference Analysis",
+                "Correlation Analysis": "Correlation Plot",
+                "Statistical Distribution": "Statistical Summary",
+                "Trend Comparison": "Performance Comparison",
+                "Scatter Matrix": "Correlation",
+                "Box Plot Comparison": "Statistical",
+                "Histogram Overlay": "Overlay",
+                "Time Series Alignment": "Smart Overlay"
+            }
+            
+            mapped_type = type_mapping.get(viz_type, "Overlay")
+            
+            # Run comparison with the specific visualization type
+            primary_name = self.comp_primary_var.get()
+            secondary_name = self.comp_secondary_var.get()
+            
+            # Find the series configurations
+            primary_config = None
+            secondary_config = None
+            
+            for config in self.series_configs.values():
+                if config.name == primary_name:
+                    primary_config = config
+                elif config.name == secondary_name:
+                    secondary_config = config
+            
+            if primary_config and secondary_config:
+                # Get the data for both series
+                primary_file_data = self.loaded_files.get(primary_config.file_id)
+                secondary_file_data = self.loaded_files.get(secondary_config.file_id)
+                
+                if primary_file_data and secondary_file_data:
+                    # Get x and y data with error handling
+                    try:
+                        # Check if columns exist
+                        if primary_config.x_column not in primary_file_data.data.columns:
+                            raise ValueError(f"Column '{primary_config.x_column}' not found in primary series file")
+                        if primary_config.y_column not in primary_file_data.data.columns:
+                            raise ValueError(f"Column '{primary_config.y_column}' not found in primary series file")
+                        if secondary_config.x_column not in secondary_file_data.data.columns:
+                            raise ValueError(f"Column '{secondary_config.x_column}' not found in secondary series file")
+                        if secondary_config.y_column not in secondary_file_data.data.columns:
+                            raise ValueError(f"Column '{secondary_config.y_column}' not found in secondary series file")
+                        
+                        x1 = primary_file_data.data[primary_config.x_column].values
+                        y1 = primary_file_data.data[primary_config.y_column].values
+                        x2 = secondary_file_data.data[secondary_config.x_column].values
+                        y2 = secondary_file_data.data[secondary_config.y_column].values
+                        
+                        # Validate data arrays
+                        if len(x1) == 0 or len(y1) == 0 or len(x2) == 0 or len(y2) == 0:
+                            raise ValueError("One or more data arrays are empty")
+                        
+                    except Exception as data_error:
+                        raise ValueError(f"Data access error: {data_error}")
+                    
+                    # Perform comparison and create plot with the selected type
+                    results = self.perform_series_comparison(
+                        x1, y1, x2, y2, primary_name, secondary_name, 
+                        mapped_type, self.time_align_var.get()
+                    )
+                    
+                    # Create the plot with the specific type
+                    self.create_comparison_plot(x1, y1, x2, y2, primary_name, secondary_name, mapped_type, results)
+                    
+                    # Update status
+                    if hasattr(self, 'status_label'):
+                        self.status_label.configure(text="✅ Visualization updated")
+                        
         except Exception as e:
             print(f"Visualization update error: {e}")
-            # Fallback to just updating the plot if quick compare fails
-            self._update_comparison_plot()
+            if hasattr(self, 'status_label'):
+                self.status_label.configure(text="❌ Update failed")
+            # Fallback to simple plot update
+            self._create_simple_comparison_plot()
+
+    def _create_simple_comparison_plot(self):
+        """Create a simple comparison plot as fallback"""
+        try:
+            # Clear previous plot
+            for widget in self.comparison_plot_frame.winfo_children():
+                widget.destroy()
+            
+            # Create a simple message
+            fallback_msg = ctk.CTkLabel(
+                self.comparison_plot_frame,
+                text="⚠️ Unable to update visualization\nPlease run analysis again",
+                font=ctk.CTkFont(size=12),
+                text_color=("gray60", "gray40"),
+                justify="center"
+            )
+            fallback_msg.pack(expand=True, pady=50)
+        except Exception as e:
+            print(f"Fallback plot error: {e}")
     
     def _quick_compare(self):
         """Run a quick comparison with smart defaults"""
@@ -2536,7 +2760,7 @@ class StatisticalAnalysisDialog:
                 "Start Times": "Start Times", 
                 "Peak Alignment": "Peak Alignment",
                 "Cross-Correlation": "Cross-Correlation",
-                "Custom Offset": "None"  # TODO: Implement custom offset
+                "Custom Offset": f"Primary: {getattr(self, 'primary_offset_var', tk.DoubleVar(value=0.0)).get():.2f}, Secondary: {getattr(self, 'secondary_offset_var', tk.DoubleVar(value=0.0)).get():.2f}"
             }
             
             time_align = align_mapping.get(self.time_align_var.get(), "None")
@@ -2582,16 +2806,38 @@ class StatisticalAnalysisDialog:
             
             # Check for similar patterns (correlation-based)
             if len(y1) > 10 and len(y2) > 10:
-                # Simple correlation check
-                min_len = min(len(y1), len(y2))
-                corr = np.corrcoef(y1[:min_len], y2[:min_len])[0, 1]
-                
-                if abs(corr) > 0.7:
-                    return "Start Times"  # Similar patterns, align starts
-                elif abs(corr) > 0.3:
-                    return "Cross-Correlation"  # Some similarity, find best offset
-                else:
-                    return "Peak Alignment"  # Different patterns, align peaks
+                # Simple correlation check with error handling
+                try:
+                    min_len = min(len(y1), len(y2))
+                    y1_sample = y1[:min_len]
+                    y2_sample = y2[:min_len]
+                    
+                    # Check for valid data
+                    valid_mask = np.isfinite(y1_sample) & np.isfinite(y2_sample)
+                    if np.sum(valid_mask) > 10:
+                        y1_clean = y1_sample[valid_mask]
+                        y2_clean = y2_sample[valid_mask]
+                        
+                        # Check for sufficient variation
+                        if np.std(y1_clean) > 1e-10 and np.std(y2_clean) > 1e-10:
+                            corr = np.corrcoef(y1_clean, y2_clean)[0, 1]
+                            
+                            if not np.isfinite(corr):
+                                corr = 0.0
+                                
+                            if abs(corr) > 0.7:
+                                return "Start Times"  # Similar patterns, align starts
+                            elif abs(corr) > 0.3:
+                                return "Cross-Correlation"  # Some similarity, find best offset
+                            else:
+                                return "Peak Alignment"  # Different patterns, align peaks
+                        else:
+                            return "Start Times"  # No variation, use simple alignment
+                    else:
+                        return "Start Times"  # Not enough valid data
+                except (np.linalg.LinAlgError, ValueError) as e:
+                    print(f"Correlation calculation failed: {e}")
+                    return "Start Times"  # Fallback to simple alignment
             
             # Default for short series
             return "Start Times"
@@ -2735,20 +2981,31 @@ class StatisticalAnalysisDialog:
         """Perform detailed comparison analysis between two series"""
         results = {}
         
-        # Basic statistics for both series
+        # Validate input data
+        if len(y1) == 0 or len(y2) == 0:
+            raise ValueError("Cannot analyze empty data series")
+        
+        # Remove any NaN or infinite values
+        y1_clean = y1[np.isfinite(y1)]
+        y2_clean = y2[np.isfinite(y2)]
+        
+        if len(y1_clean) == 0 or len(y2_clean) == 0:
+            raise ValueError("No valid data points after removing NaN/infinite values")
+        
+        # Basic statistics for both series (use original data for consistency)
         results['series1_stats'] = {
-            'mean': np.mean(y1),
-            'std': np.std(y1),
-            'min': np.min(y1),
-            'max': np.max(y1),
+            'mean': np.mean(y1_clean),
+            'std': np.std(y1_clean),
+            'min': np.min(y1_clean),
+            'max': np.max(y1_clean),
             'count': len(y1)
         }
         
         results['series2_stats'] = {
-            'mean': np.mean(y2),
-            'std': np.std(y2),
-            'min': np.min(y2),
-            'max': np.max(y2),
+            'mean': np.mean(y2_clean),
+            'std': np.std(y2_clean),
+            'min': np.min(y2_clean),
+            'max': np.max(y2_clean),
             'count': len(y2)
         }
         
@@ -2791,39 +3048,69 @@ class StatisticalAnalysisDialog:
                     results['y1_interpolated'] = y1_interp
                     results['y2_interpolated'] = y2_interp
                     
+                    # Calculate correlation with robust error handling
+                    if len(y1_interp) > 1 and len(y2_interp) > 1:
+                        try:
+                            # Check for valid data
+                            valid_mask = np.isfinite(y1_interp) & np.isfinite(y2_interp)
+                            if np.sum(valid_mask) > 1:
+                                y1_clean = y1_interp[valid_mask]
+                                y2_clean = y2_interp[valid_mask]
+                                
+                                # Check for sufficient variation
+                                if np.std(y1_clean) > 1e-10 and np.std(y2_clean) > 1e-10 and len(y1_clean) > 1:
+                                    correlation = np.corrcoef(y1_clean, y2_clean)[0, 1]
+                                    if np.isfinite(correlation):
+                                        results['correlation'] = correlation
+                                    else:
+                                        results['correlation'] = 0.0
+                                else:
+                                    results['correlation'] = 0.0
+                            else:
+                                results['correlation'] = 0.0
+                        except (np.linalg.LinAlgError, ValueError) as e:
+                            print(f"Correlation calculation failed: {e}")
+                            results['correlation'] = 0.0
+                    
+                    # Calculate difference metrics
+                    try:
+                        diff = y1_interp - y2_interp
+                        results['difference_stats'] = {
+                            'mean_diff': np.mean(diff),
+                            'std_diff': np.std(diff),
+                            'max_diff': np.max(np.abs(diff)),
+                            'rms_diff': np.sqrt(np.mean(diff**2))
+                        }
+                    except Exception as e:
+                        print(f"Difference calculation failed: {e}")
+                        results['difference_stats'] = {
+                            'mean_diff': 0.0,
+                            'std_diff': 0.0,
+                            'max_diff': 0.0,
+                            'rms_diff': 0.0
+                        }
+                    
+                    # Statistical tests
+                    try:
+                        from scipy.stats import ttest_ind, ks_2samp
+                        
+                        # T-test for means
+                        t_stat, t_pval = ttest_ind(y1_interp, y2_interp)
+                        results['ttest'] = {'statistic': t_stat, 'p_value': t_pval}
+                        
+                        # Kolmogorov-Smirnov test for distributions
+                        ks_stat, ks_pval = ks_2samp(y1_interp, y2_interp)
+                        results['ks_test'] = {'statistic': ks_stat, 'p_value': ks_pval}
+                        
+                    except ImportError:
+                        logger.warning("scipy.stats not available for statistical tests")
+                    except Exception as e:
+                        print(f"Statistical tests failed: {e}")
+                        
             except Exception as e:
                 logger.warning(f"Failed to create common time base: {e}")
                 # Skip interpolation-dependent analysis
-                return results
-                
-                # Calculate correlation
-                if len(y1_interp) > 1 and len(y2_interp) > 1:
-                    correlation = np.corrcoef(y1_interp, y2_interp)[0, 1]
-                    results['correlation'] = correlation
-                
-                # Calculate difference metrics
-                diff = y1_interp - y2_interp
-                results['difference_stats'] = {
-                    'mean_diff': np.mean(diff),
-                    'std_diff': np.std(diff),
-                    'max_diff': np.max(np.abs(diff)),
-                    'rms_diff': np.sqrt(np.mean(diff**2))
-                }
-                
-                # Statistical tests
-                try:
-                    from scipy.stats import ttest_ind, ks_2samp
-                    
-                    # T-test for means
-                    t_stat, t_pval = ttest_ind(y1_interp, y2_interp)
-                    results['ttest'] = {'statistic': t_stat, 'p_value': t_pval}
-                    
-                    # Kolmogorov-Smirnov test for distributions
-                    ks_stat, ks_pval = ks_2samp(y1_interp, y2_interp)
-                    results['ks_test'] = {'statistic': ks_stat, 'p_value': ks_pval}
-                    
-                except ImportError:
-                    logger.warning("scipy.stats not available for statistical tests")
+                results['correlation'] = 0.0
         
         # Performance metrics comparison (if applicable for vacuum data)
         if 'pressure' in name1.lower() or 'vacuum' in name1.lower():
@@ -2869,6 +3156,16 @@ class StatisticalAnalysisDialog:
                 y2_aligned = y2[-lag:]
             
             return x1_aligned, y1_aligned, x2_aligned, y2_aligned
+            
+        elif method == "Custom Offset":
+            # Apply manual time offsets
+            primary_offset = getattr(self, 'primary_offset_var', tk.DoubleVar(value=0.0)).get()
+            secondary_offset = getattr(self, 'secondary_offset_var', tk.DoubleVar(value=0.0)).get()
+            
+            x1_aligned = x1 + primary_offset
+            x2_aligned = x2 + secondary_offset
+            
+            return x1_aligned, y1, x2_aligned, y2
         
         return x1, y1, x2, y2
 
@@ -2918,71 +3215,215 @@ class StatisticalAnalysisDialog:
         return comparison
 
     def create_comparison_plot(self, x1, y1, x2, y2, name1, name2, comp_type, results):
-        """Create comparison visualization"""
+        """Create comparison visualization with appropriate sizing"""
         # Clear previous plot
         for widget in self.comparison_plot_frame.winfo_children():
             widget.destroy()
         
-        fig = Figure(figsize=(10, 8))
+        # Use smaller, more appropriate figure size for UI
+        fig = Figure(figsize=(8, 5), dpi=80)
+        fig.patch.set_facecolor('white')
         
-        if comp_type == "Overlay":
+        try:
+            if comp_type in ["Overlay", "Smart Overlay"]:
+                ax = fig.add_subplot(111)
+                ax.plot(x1, y1, label=name1, alpha=0.8, linewidth=1.5)
+                ax.plot(x2, y2, label=name2, alpha=0.8, linewidth=1.5)
+                ax.set_xlabel("Time", fontsize=10)
+                ax.set_ylabel("Value", fontsize=10)
+                ax.set_title(f"Overlay Comparison: {name1} vs {name2}", fontsize=11, pad=10)
+                ax.legend(fontsize=9)
+                ax.grid(True, alpha=0.3)
+                ax.tick_params(labelsize=9)
+                
+            elif comp_type == "Side-by-Side":
+                ax1 = fig.add_subplot(211)
+                ax1.plot(x1, y1, label=name1, color='blue', linewidth=1.5)
+                ax1.set_title(name1, fontsize=10, pad=8)
+                ax1.grid(True, alpha=0.3)
+                ax1.tick_params(labelsize=8)
+                
+                ax2 = fig.add_subplot(212)
+                ax2.plot(x2, y2, label=name2, color='orange', linewidth=1.5)
+                ax2.set_title(name2, fontsize=10, pad=8)
+                ax2.set_xlabel("Time", fontsize=10)
+                ax2.grid(True, alpha=0.3)
+                ax2.tick_params(labelsize=8)
+                
+            elif comp_type in ["Difference", "Difference Analysis"] and 'common_time' in results:
+                ax = fig.add_subplot(111)
+                diff = results['y1_interpolated'] - results['y2_interpolated']
+                ax.plot(results['common_time'], diff, label=f"{name1} - {name2}", color='red', linewidth=1.5)
+                ax.axhline(y=0, color='black', linestyle='--', alpha=0.5)
+                ax.set_xlabel("Time", fontsize=10)
+                ax.set_ylabel("Difference", fontsize=10)
+                ax.set_title(f"Difference: {name1} - {name2}", fontsize=11, pad=10)
+                ax.grid(True, alpha=0.3)
+                ax.tick_params(labelsize=9)
+                
+            elif comp_type in ["Correlation", "Correlation Plot"] and 'y1_interpolated' in results:
+                ax = fig.add_subplot(111)
+                y1_interp = results['y1_interpolated']
+                y2_interp = results['y2_interpolated']
+                ax.scatter(y1_interp, y2_interp, alpha=0.6, s=20)
+                
+                # Add trend line with robust error handling
+                if len(y1_interp) > 1:
+                    try:
+                        # Check for valid data
+                        valid_mask = np.isfinite(y1_interp) & np.isfinite(y2_interp)
+                        if np.sum(valid_mask) > 1:
+                            y1_clean = y1_interp[valid_mask]
+                            y2_clean = y2_interp[valid_mask]
+                            
+                            # Only fit if we have enough data points
+                            if len(y1_clean) > 1 and np.std(y1_clean) > 1e-10:
+                                z = np.polyfit(y1_clean, y2_clean, 1)
+                                p = np.poly1d(z)
+                                ax.plot(y1_clean, p(y1_clean), "r--", alpha=0.8, linewidth=1.5)
+                    except (np.linalg.LinAlgError, np.RankWarning, ValueError) as e:
+                        # Skip trend line if computation fails
+                        print(f"Trend line computation failed: {e}")
+                        pass
+                
+                ax.set_xlabel(name1, fontsize=10)
+                ax.set_ylabel(name2, fontsize=10)
+                ax.set_title(f"Correlation: {name1} vs {name2}", fontsize=11, pad=10)
+                if 'correlation' in results:
+                    ax.text(0.05, 0.95, f"R = {results['correlation']:.3f}", 
+                           transform=ax.transAxes, bbox=dict(boxstyle="round", facecolor="white"),
+                           fontsize=9)
+                ax.grid(True, alpha=0.3)
+                ax.tick_params(labelsize=9)
+                
+            elif comp_type in ["Statistical Summary", "Statistical"]:
+                # Create statistical summary visualization
+                ax = fig.add_subplot(111)
+                
+                # Box plot comparison
+                data_to_plot = [y1, y2]
+                box_plot = ax.boxplot(data_to_plot, tick_labels=[name1, name2], patch_artist=True)
+                
+                # Color the boxes
+                colors = ['lightblue', 'lightcoral']
+                for patch, color in zip(box_plot['boxes'], colors):
+                    patch.set_facecolor(color)
+                    patch.set_alpha(0.7)
+                
+                ax.set_ylabel("Value", fontsize=10)
+                ax.set_title("Statistical Summary Comparison", fontsize=11, pad=10)
+                ax.grid(True, alpha=0.3, axis='y')
+                ax.tick_params(labelsize=9)
+                
+                # Add statistical annotations
+                if 'series1_stats' in results and 'series2_stats' in results:
+                    stats1 = results['series1_stats']
+                    stats2 = results['series2_stats']
+                    
+                    info_text = f"{name1}: μ={stats1['mean']:.3f}, σ={stats1['std']:.3f}\n"
+                    info_text += f"{name2}: μ={stats2['mean']:.3f}, σ={stats2['std']:.3f}"
+                    
+                    ax.text(0.02, 0.98, info_text, transform=ax.transAxes, 
+                           bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+                           fontsize=8, verticalalignment='top')
+                
+            elif comp_type in ["Performance Comparison", "Performance"]:
+                # Create performance comparison visualization
+                ax = fig.add_subplot(111)
+                
+                # Calculate performance metrics
+                try:
+                    # Stability comparison (coefficient of variation)
+                    cv1 = np.std(y1) / np.abs(np.mean(y1)) if np.mean(y1) != 0 else float('inf')
+                    cv2 = np.std(y2) / np.abs(np.mean(y2)) if np.mean(y2) != 0 else float('inf')
+                    
+                    # Base level comparison (10th percentile)
+                    base1 = np.percentile(y1, 10)
+                    base2 = np.percentile(y2, 10)
+                    
+                    # Create bar chart comparing metrics
+                    metrics = ['Stability\n(lower=better)', 'Base Level\n(lower=better)']
+                    series1_values = [cv1, base1]
+                    series2_values = [cv2, base2]
+                    
+                    x_pos = np.arange(len(metrics))
+                    width = 0.35
+                    
+                    bars1 = ax.bar(x_pos - width/2, series1_values, width, 
+                                  label=name1, alpha=0.8, color='lightblue')
+                    bars2 = ax.bar(x_pos + width/2, series2_values, width,
+                                  label=name2, alpha=0.8, color='lightcoral')
+                    
+                    ax.set_xlabel('Performance Metrics', fontsize=10)
+                    ax.set_ylabel('Value', fontsize=10)
+                    ax.set_title('Performance Comparison', fontsize=11, pad=10)
+                    ax.set_xticks(x_pos)
+                    ax.set_xticklabels(metrics, fontsize=9)
+                    ax.legend(fontsize=9)
+                    ax.grid(True, alpha=0.3, axis='y')
+                    ax.tick_params(labelsize=9)
+                    
+                    # Add value labels on bars
+                    for bars in [bars1, bars2]:
+                        for bar in bars:
+                            height = bar.get_height()
+                            if np.isfinite(height) and height != 0:
+                                ax.text(bar.get_x() + bar.get_width()/2., height,
+                                       f'{height:.3e}', ha='center', va='bottom', fontsize=7)
+                    
+                except Exception as e:
+                    # Fallback to simple overlay if performance metrics fail
+                    ax.plot(x1, y1, label=name1, alpha=0.8, linewidth=1.5)
+                    ax.plot(x2, y2, label=name2, alpha=0.8, linewidth=1.5)
+                    ax.set_xlabel("Time", fontsize=10)
+                    ax.set_ylabel("Value", fontsize=10)
+                    ax.set_title(f"Performance Comparison: {name1} vs {name2}", fontsize=11, pad=10)
+                    ax.legend(fontsize=9)
+                    ax.grid(True, alpha=0.3)
+                    ax.tick_params(labelsize=9)
+            
+            else:
+                # Default fallback - overlay plot
+                ax = fig.add_subplot(111)
+                ax.plot(x1, y1, label=name1, alpha=0.8, linewidth=1.5)
+                ax.plot(x2, y2, label=name2, alpha=0.8, linewidth=1.5)
+                ax.set_xlabel("Time", fontsize=10)
+                ax.set_ylabel("Value", fontsize=10)
+                ax.set_title(f"Comparison: {name1} vs {name2}", fontsize=11, pad=10)
+                ax.legend(fontsize=9)
+                ax.grid(True, alpha=0.3)
+                ax.tick_params(labelsize=9)
+            
+            # Apply tight layout with smaller padding
+            fig.tight_layout(pad=1.5)
+            
+        except Exception as e:
+            # Error handling - create simple error plot
             ax = fig.add_subplot(111)
-            ax.plot(x1, y1, label=name1, alpha=0.8)
-            ax.plot(x2, y2, label=name2, alpha=0.8)
-            ax.set_xlabel("Time")
-            ax.set_ylabel("Value")
-            ax.set_title(f"Overlay Comparison: {name1} vs {name2}")
-            ax.legend()
-            ax.grid(True, alpha=0.3)
+            ax.text(0.5, 0.5, f"Plot Error: {str(e)}\n\nUsing fallback visualization", 
+                   ha='center', va='center', transform=ax.transAxes,
+                   bbox=dict(boxstyle="round", facecolor="lightyellow"),
+                   fontsize=10)
             
-        elif comp_type == "Side-by-Side":
-            ax1 = fig.add_subplot(211)
-            ax1.plot(x1, y1, label=name1, color='blue')
-            ax1.set_title(name1)
-            ax1.grid(True, alpha=0.3)
+            # Try simple fallback plot
+            try:
+                ax.plot(x1, y1, label=name1, alpha=0.8, linewidth=1.5)
+                ax.plot(x2, y2, label=name2, alpha=0.8, linewidth=1.5)
+                ax.legend(fontsize=9)
+            except:
+                pass  # If even fallback fails, show error message only
             
-            ax2 = fig.add_subplot(212)
-            ax2.plot(x2, y2, label=name2, color='orange')
-            ax2.set_title(name2)
-            ax2.set_xlabel("Time")
-            ax2.grid(True, alpha=0.3)
-            
-        elif comp_type == "Difference" and 'common_time' in results:
-            ax = fig.add_subplot(111)
-            diff = results['y1_interpolated'] - results['y2_interpolated']
-            ax.plot(results['common_time'], diff, label=f"{name1} - {name2}", color='red')
-            ax.axhline(y=0, color='black', linestyle='--', alpha=0.5)
-            ax.set_xlabel("Time")
-            ax.set_ylabel("Difference")
-            ax.set_title(f"Difference: {name1} - {name2}")
-            ax.grid(True, alpha=0.3)
-            
-        elif comp_type == "Correlation" and 'y1_interpolated' in results:
-            ax = fig.add_subplot(111)
-            y1_interp = results['y1_interpolated']
-            y2_interp = results['y2_interpolated']
-            ax.scatter(y1_interp, y2_interp, alpha=0.6)
-            
-            # Add trend line
-            if len(y1_interp) > 1:
-                z = np.polyfit(y1_interp, y2_interp, 1)
-                p = np.poly1d(z)
-                ax.plot(y1_interp, p(y1_interp), "r--", alpha=0.8)
-            
-            ax.set_xlabel(name1)
-            ax.set_ylabel(name2)
-            ax.set_title(f"Correlation: {name1} vs {name2}")
-            if 'correlation' in results:
-                ax.text(0.05, 0.95, f"R = {results['correlation']:.3f}", 
-                       transform=ax.transAxes, bbox=dict(boxstyle="round", facecolor="white"))
-            ax.grid(True, alpha=0.3)
+            ax.set_title(f"Comparison Plot ({comp_type})", fontsize=11, pad=10)
+            fig.tight_layout(pad=1.5)
         
-        fig.tight_layout()
-        
-        # Embed plot
+        # Embed plot with better sizing
         canvas = FigureCanvasTkAgg(fig, self.comparison_plot_frame)
         canvas.draw()
-        canvas.get_tk_widget().pack(fill="both", expand=True)
+        
+        # Configure canvas widget to fit properly
+        canvas_widget = canvas.get_tk_widget()
+        canvas_widget.configure(highlightthickness=0)
+        canvas_widget.pack(fill="both", expand=True, padx=5, pady=5)
 
     def display_comparison_results(self, results, name1, name2, comp_type):
         """Display comparison results in text area"""
@@ -3294,29 +3735,32 @@ class StatisticalAnalysisDialog:
 
         x_data, y_data = series.get_data(file_data)
 
-        # Detect leaks
-        leaks = self.vacuum_analyzer.detect_leaks(y_data)
+        # Detect leaks (returns leak rate, not list of leaks)
+        leak_rate = self.vacuum_analyzer.detect_leaks(y_data)
 
         # Display results
         text = f"LEAK DETECTION: {series_name}\n"
         text += "=" * 50 + "\n\n"
 
-        if leaks:
-            text += f"Detected {len(leaks)} potential leaks:\n\n"
-            for i, leak in enumerate(leaks):
-                text += f"Leak #{i + 1}:\n"
-                text += f"  Start: {leak['start']}\n"
-                text += f"  End: {leak['end']}\n"
-                text += f"  Leak Rate: {leak['rate']:.2e} mbar·L/s\n"
-                text += f"  Confidence: {leak['confidence']:.1f}%\n\n"
+        if leak_rate and not np.isnan(leak_rate) and leak_rate > 0:
+            text += f"Leak Rate Analysis:\n\n"
+            text += f"  Calculated Leak Rate: {leak_rate:.2e} mbar·L/s\n\n"
+            
+            # Provide interpretation
+            if leak_rate > 1e-6:
+                text += "  Interpretation: High leak rate detected - significant leak present\n"
+            elif leak_rate > 1e-8:
+                text += "  Interpretation: Moderate leak rate - minor leak may be present\n"
+            else:
+                text += "  Interpretation: Low leak rate - system appears tight\n"
         else:
-            text += "No leaks detected\n"
+            text += "No significant leak detected or insufficient data for analysis\n"
 
         self.leak_text.delete(1.0, tk.END)
         self.leak_text.insert(1.0, text)
 
         # Store result
-        self.vacuum_results['leaks'] = leaks
+        self.vacuum_results['leak_rate'] = leak_rate
 
     def _analyze_pumpdown(self):
         """Analyze pump-down characteristics"""
@@ -3348,10 +3792,21 @@ class StatisticalAnalysisDialog:
         # Display results
         text = f"PUMP-DOWN ANALYSIS: {series_name}\n"
         text += "=" * 50 + "\n\n"
-        text += f"Initial Pressure: {result['initial_pressure']:.2e} mbar\n"
-        text += f"Final Pressure: {result['final_pressure']:.2e} mbar\n"
-        text += f"Time Constant: {result['time_constant']:.1f} seconds\n"
-        text += f"Pump-down Rate: {result['pumpdown_rate']:.2e} mbar/s\n"
+        
+        if result and isinstance(result, dict):
+            text += f"Initial Pressure: {result.get('initial_pressure', 'N/A'):.2e} mbar\n"
+            text += f"Minimum Pressure: {result.get('min_pressure', 'N/A'):.2e} mbar\n"
+            text += f"Base Pressure: {result.get('base_pressure', 'N/A'):.2e} mbar\n"
+            text += f"Pump-down Rate: {result.get('pumpdown_rate', 'N/A'):.2e} mbar/s\n"
+            text += f"Leak Rate: {result.get('leak_rate', 'N/A'):.2e} mbar·L/s\n"
+            
+            if result.get('time_to_10_percent'):
+                text += f"Time to 10% of initial: {result['time_to_10_percent']:.1f} seconds\n"
+            
+            text += f"Time to minimum: {result.get('time_to_min', 'N/A'):.1f} seconds\n"
+            text += f"Pumping Efficiency: {result.get('pumping_efficiency', 'N/A'):.2e} mbar/s\n"
+        else:
+            text += "Error: Unable to analyze pumpdown data\n"
 
         self.pump_text.delete(1.0, tk.END)
         self.pump_text.insert(1.0, text)
@@ -3396,11 +3851,6 @@ class StatisticalAnalysisDialog:
                     messagebox.showinfo("Success", f"Results exported to {filename}")
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to export: {str(e)}")
-
-    @property
-    def root(self):
-        """Provide root property for compatibility"""
-        return self.dialog
 
     def protocol(self, protocol_name, callback):
         """Set protocol handler for dialog window"""
